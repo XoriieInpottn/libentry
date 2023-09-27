@@ -6,12 +6,12 @@ if __name__ == '__main__':
     with open('README.md') as file:
         long_description = file.read()
     setup(
-        name='libexperiment',
+        name='libentry',
         packages=[
-            'libexperiment',
+            'libentry',
         ],
         version='1.0',
-        description='Utilities to perform and re-product experiments.',
+        description='Entries for experimental utilities.',
         long_description_content_type='text/markdown',
         long_description=long_description,
         license='Apache-2.0 license ',
@@ -20,9 +20,7 @@ if __name__ == '__main__':
         url='https://github.com/XoriieInpottn/libexperiment',
         platforms='any',
         classifiers=[
-            'Programming Language :: Python :: 3.6',
-            'Programming Language :: Python :: 3.7',
-            'Programming Language :: Python :: 3.8',
+            'Programming Language :: Python :: 3',
         ],
         include_package_data=True,
         zip_safe=True,
