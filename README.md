@@ -1,2 +1,2 @@
-# libexperiment
+# libentry
 
