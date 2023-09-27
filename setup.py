@@ -10,14 +10,14 @@ if __name__ == '__main__':
         packages=[
             'libentry',
         ],
-        version='1.1',
+        version='1.2',
         description='Entries for experimental utilities.',
         long_description_content_type='text/markdown',
         long_description=long_description,
         license='Apache-2.0 license ',
         author='xi',
         author_email='gylv@mail.ustc.edu.cn',
-        url='https://github.com/XoriieInpottn/libexperiment',
+        url='https://github.com/XoriieInpottn/libentry',
         platforms='any',
         classifiers=[
             'Programming Language :: Python :: 3',
