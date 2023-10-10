@@ -8,7 +8,9 @@
 import argparse
 import ast
 import inspect
+import logging
 import re
+from dataclasses import is_dataclass
 from typing import MutableMapping, Sequence, Mapping
 
 __all__ = [
@@ -217,8 +219,66 @@ def _fill_value(known_args, name, values):
 
 
 class ArgumentParser(argparse.ArgumentParser):
-    """Argument parser
-    """
+    DATACLASS_OBJ_KEY = 'target'
+
+    def __init__(self):
+        super().__init__()
+        self.obj_dict = {}
+
+    def add_argument(self, *args, **kwargs):
+        if self.DATACLASS_OBJ_KEY in kwargs:
+            obj = kwargs[self.DATACLASS_OBJ_KEY]
+            for prefix in args:
+                self.obj_dict[prefix] = obj
+            return obj
+        elif len(args) >= 2 and is_dataclass(args[-1]) and all(isinstance(arg, str) for arg in args[:-1]):
+            obj = args[-1]
+            for prefix in args[:-1]:
+                self.obj_dict[prefix] = obj
+            return obj
+        else:
+            return super().add_argument(*args, **kwargs)
 
     def parse_args(self, args=None, namespace=None, parse_unknown=False):
-        return parse_all_args(*super(ArgumentParser, self).parse_known_args())
+        args, unknown_args = super().parse_known_args()
+
+        d = {}
+        name = None
+        values = []
+        for arg in unknown_args:
+            if arg.startswith('-'):
+                if re.match(r'^--[a-zA-Z][\w\-.]*$', arg):
+                    if name is not None:
+                        d[name] = values[0] if len(values) == 1 else values
+                        values = []
+                    name = arg[2:].replace('-', '_')
+                else:
+                    # ignore invalid arguments
+                    logging.warning(f'Invalid argument "{arg}".')
+            else:
+                values.append(literal_eval(arg))
+        if name is not None:
+            d[name] = values[0] if len(values) == 1 else values
+
+        for name, value in d.items():
+            sections = name.split('.')
+            if len(sections) == 1:
+                args.__dict__[name] = value
+            else:
+                prefix = sections[0]
+                members = sections[1:-1]
+                attr = sections[-1]
+                if prefix not in self.obj_dict:
+                    raise RuntimeError(f'There is no {prefix} argument.')
+                obj = self.obj_dict[prefix]
+
+                for member in members:
+                    if not hasattr(obj, member):
+                        raise RuntimeError(f'There is no {prefix} argument {name}.')
+                    obj = getattr(obj, member)
+
+                if not hasattr(obj, attr):
+                    raise RuntimeError(f'There is no {prefix} argument {name}.')
+                setattr(obj, sections[-1], value)
+
+        return args
