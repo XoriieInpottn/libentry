@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 from socketserver import ThreadingMixIn
 from threading import Thread
 from xmlrpc.server import SimpleXMLRPCServer, SimpleXMLRPCRequestHandler
@@ -20,6 +21,11 @@ class MultRequestHandler(SimpleXMLRPCRequestHandler):
 class XMLRPCServerMixIn:
 
     def serve_forever(self, addr, daemon=False):
+        if 'RANK' in os.environ:
+            rank = int(os.environ['RANK'])
+            if rank > 0:
+                return
+
         with ThreadXMLRPCServer(addr, requestHandler=MultRequestHandler, allow_none=True) as server:
             server.register_introspection_functions()
             server.register_multicall_functions()

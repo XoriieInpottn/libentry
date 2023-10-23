@@ -15,16 +15,6 @@ import tarfile
 from collections import defaultdict
 from datetime import datetime
 
-try:
-    import numpy as np
-except ImportError:
-    np = None
-
-try:
-    import torch
-except ImportError:
-    torch = None
-
 __all__ = [
     'fix_random_seed',
     'Experiment'
@@ -43,10 +33,18 @@ def fix_random_seed(
         os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
     random.seed(seed)
 
-    if for_numpy and np is not None:
+    if for_numpy:
+        try:
+            import numpy as np
+        except ImportError:
+            raise RuntimeError('numpy not found. pip install numpy')
         np.random.seed(seed)
 
-    if for_torch and torch is not None:
+    if for_torch:
+        try:
+            import torch
+        except ImportError:
+            raise RuntimeError('torch not found. pip install torch.')
         torch.manual_seed(seed)
         torch.random.manual_seed(seed)
         torch.cuda.manual_seed(seed)
@@ -82,6 +80,15 @@ class Experiment(object):
             f.write(end)
 
     def log_tensor(self, name, tensor):
+        try:
+            import numpy as np
+        except ImportError:
+            raise RuntimeError('numpy not found. pip install numpy')
+        try:
+            import torch
+        except ImportError:
+            raise RuntimeError('torch not found. pip install torch.')
+
         tar_path = os.path.join(self.experiment_dir, name + '.tar')
         self.counter[name] += 1
         filename = f'{self.counter[name]}.npy'

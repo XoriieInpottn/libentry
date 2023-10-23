@@ -10,14 +10,15 @@ import ast
 import inspect
 import logging
 import re
-from dataclasses import is_dataclass
-from typing import MutableMapping, Sequence, Mapping
+from dataclasses import is_dataclass, fields
+from typing import MutableMapping, Sequence, Mapping, TypeVar, Type, Union, Optional
 
 __all__ = [
     'ConfigFromArguments',
     'literal_eval',
     'parse_all_args',
-    'ArgumentParser'
+    'ArgumentParser',
+    'inject_fields'
 ]
 
 
@@ -218,6 +219,9 @@ def _fill_value(known_args, name, values):
     known_args.__dict__[name] = values[0] if len(values) == 1 else values
 
 
+T = TypeVar('T')
+
+
 class ArgumentParser(argparse.ArgumentParser):
     DATACLASS_OBJ_KEY = 'target'
 
@@ -238,6 +242,13 @@ class ArgumentParser(argparse.ArgumentParser):
             return obj
         else:
             return super().add_argument(*args, **kwargs)
+
+    def add_dataclass(self, prefix, d: Union[Type[T], T]) -> T:
+        assert is_dataclass(d)
+        if isinstance(d, type):
+            d = d()
+        self.obj_dict[prefix] = d
+        return d
 
     def parse_args(self, args=None, namespace=None, parse_unknown=False):
         args, unknown_args = super().parse_known_args()
@@ -282,3 +293,15 @@ class ArgumentParser(argparse.ArgumentParser):
                 setattr(obj, sections[-1], value)
 
         return args
+
+
+def inject_fields(dst, src, blacklist: Optional[Sequence[str]] = None):
+    dst_field_names = {_field.name for _field in fields(dst)}
+    for src_field in fields(src):
+        name = src_field.name
+        if blacklist and name in blacklist:
+            continue
+        if name in dst_field_names:
+            value = getattr(src, name)
+            setattr(dst, name, value)
+    return dst
