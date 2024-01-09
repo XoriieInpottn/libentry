@@ -10,7 +10,7 @@ if __name__ == '__main__':
         packages=[
             'libentry',
         ],
-        version='1.6',
+        version='1.7',
         description='Entries for experimental utilities.',
         long_description_content_type='text/markdown',
         long_description=long_description,
