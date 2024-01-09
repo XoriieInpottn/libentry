@@ -5,8 +5,10 @@ from socketserver import ThreadingMixIn
 from threading import Thread
 from xmlrpc.server import SimpleXMLRPCServer, SimpleXMLRPCRequestHandler
 
+from .logging import logger
+
 __all__ = [
-    'XMLRPCServerMixIn'
+    'XMLRPCServerMixIn',
 ]
 
 
@@ -17,8 +19,14 @@ class ThreadXMLRPCServer(ThreadingMixIn, SimpleXMLRPCServer):
 class MultRequestHandler(SimpleXMLRPCRequestHandler):
     rpc_paths = ('/RPC2', '/RPC3')
 
+    def log_message(self, fmt, *args):
+        logger.info(fmt % args)
+
 
 class XMLRPCServerMixIn:
+
+    def __init__(self, log_request=True):
+        self.log_request = log_request
 
     def serve_forever(self, addr, daemon=False):
         if 'RANK' in os.environ:
@@ -26,7 +34,12 @@ class XMLRPCServerMixIn:
             if rank > 0:
                 return
 
-        with ThreadXMLRPCServer(addr, requestHandler=MultRequestHandler, allow_none=True) as server:
+        with ThreadXMLRPCServer(
+                addr,
+                requestHandler=MultRequestHandler,
+                allow_none=True,
+                logRequests=self.log_request
+        ) as server:
             server.register_introspection_functions()
             server.register_multicall_functions()
             server.register_instance(self)
