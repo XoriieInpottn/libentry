@@ -210,13 +210,21 @@ class PolymorphExecutor(dict):
             self[key] = fn
             return fn
 
-    def execute(self, key: Hashable, config=None, **kwargs):
+    def execute(self, key: Hashable, __config__=None, **kwargs):
         if key not in self:
             raise RuntimeError(
                 (f"{self.name}: \"{key}\"" if self.name else f"\"{key}\"") +
                 f" is not implemented."
             )
-        return ConfigurableExecutor(self[key], config, **kwargs).execute()
+        executor = ConfigurableExecutor(self[key])
+        if __config__ is not None:
+            if isinstance(__config__, (list, tuple)):
+                for obj in __config__:
+                    executor.update_args(obj)
+            else:
+                executor.update(__config__)
+        executor.update(kwargs)
+        return executor.execute()
 
     call = execute
     __call__ = execute
