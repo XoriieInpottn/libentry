@@ -7,6 +7,7 @@
 
 import re
 from dataclasses import is_dataclass, fields
+from enum import Enum
 from importlib import import_module
 from typing import *
 
@@ -79,6 +80,8 @@ def _dataclass_to_dict(obj):
     elif isinstance(obj, BASIC_TYPES):
         # obj is one of the basic types.
         return obj
+    elif isinstance(obj, Enum):
+        return obj.value
     else:
         raise TypeError(f'`{type(obj)}` is not supported.')
 
