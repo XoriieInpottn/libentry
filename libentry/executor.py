@@ -9,26 +9,30 @@ from inspect import signature, Parameter
 from typing import *
 
 __all__ = [
-    'ConfigableCaller'
+    "ConfigurableExecutor",
+    "ConfigurableCaller",
+    "RegisterDecorator",
+    "PolymorphExecutor",
+    "Factory",
 ]
 
 
-@dataclass
-class _ArgumentItem:
-    value: Any = field(default=Parameter.empty)
-    type: Type = field(default=Parameter.empty)
-    default: Any = field(default=Parameter.empty)
+class ConfigurableExecutor(MutableMapping):
+    """"""
 
+    @dataclass
+    class ArgumentItem:
+        value: Any = field(default=Parameter.empty)
+        type: Type = field(default=Parameter.empty)
+        default: Any = field(default=Parameter.empty)
 
-class ConfigableCaller(MutableMapping):
-
-    def __init__(self, wrapped: Callable, obj=None, **kwargs):
-        self._callable = wrapped
+    def __init__(self, fn: Callable, config=None, **kwargs):
+        self._fn = fn
 
         self._args = {}
-        sig = signature(wrapped.__init__ if isinstance(wrapped, type) else wrapped)
+        sig = signature(fn.__init__ if isinstance(fn, type) else fn)
         for name, param in sig.parameters.items():
-            if isinstance(wrapped, type) and name == 'self':
+            if isinstance(fn, type) and name == 'self':
                 continue
             if param.kind != Parameter.POSITIONAL_OR_KEYWORD:
                 continue
@@ -36,12 +40,12 @@ class ConfigableCaller(MutableMapping):
             ann = param.annotation
             if (ann is Parameter.empty) and (value is not Parameter.empty):
                 ann = type(param.default)
-            self._args[name] = _ArgumentItem(type=ann, default=value)
+            self._args[name] = ConfigurableExecutor.ArgumentItem(type=ann, default=value)
 
-        if obj is not None:
-            self.load(obj)
+        if config is not None:
+            self.update_args(config)
         if kwargs:
-            self.load(kwargs)
+            self.update_args(kwargs)
 
     def get_value(self, name: str) -> Any:
         return self._args[name].value
@@ -52,7 +56,7 @@ class ConfigableCaller(MutableMapping):
     def get_default(self, name: str) -> Any:
         return self._args[name].default
 
-    def load(self, obj):
+    def update_args(self, obj):
         if isinstance(obj, Mapping):
             for name in self:
                 if name in obj:
@@ -62,16 +66,16 @@ class ConfigableCaller(MutableMapping):
                 if hasattr(obj, name):
                     setattr(self, name, getattr(obj, name))
 
-    def __call__(self):
-        return self.build()
-
-    def build(self):
+    def execute(self):
         kwargs = {}
         for name, value in self.items():
             if value is Parameter.empty:
                 raise ValueError(f'"{name}" must be given.')
             kwargs[name] = value
-        return self._callable(**kwargs)
+        return self._fn(**kwargs)
+
+    call = execute
+    __call__ = execute
 
     def __getattr__(self, name):
         item = self._args[name]
@@ -79,7 +83,7 @@ class ConfigableCaller(MutableMapping):
 
     def __setattr__(self, name, value):
         if name.startswith('_'):
-            super(ConfigableCaller, self).__setattr__(name, value)
+            super(ConfigurableExecutor, self).__setattr__(name, value)
         else:
             self._args[name].value = value
 
@@ -168,3 +172,55 @@ class ConfigableCaller(MutableMapping):
             f'{name.rjust(max_len)}: {value}'
             for name, value in pairs
         ])
+
+
+ConfigurableCaller = ConfigurableExecutor
+
+
+class RegisterDecorator(dict):
+
+    def register(self, key, value=None):
+        if value is None:
+            def _register(_value):
+                self[key] = _value
+                return _value
+
+            return _register
+        else:
+            self[key] = value
+            return value
+
+    __call__ = register
+
+
+class PolymorphExecutor(dict):
+
+    def __init__(self, name: str = None):
+        super().__init__()
+        self.name = name
+
+    def register(self, key: Hashable, fn: Callable = None) -> Callable:
+        if fn is None:
+            def _register(_fn):
+                self[key] = _fn
+                return _fn
+
+            return _register
+        else:
+            self[key] = fn
+            return fn
+
+    def execute(self, key: Hashable, config=None, **kwargs):
+        if key not in self:
+            raise RuntimeError(
+                (f"{self.name}: \"{key}\"" if self.name else f"\"{key}\"") +
+                f" is not implemented."
+            )
+        return ConfigurableExecutor(self[key], config, **kwargs).execute()
+
+    call = execute
+    __call__ = execute
+    build = execute
+
+
+Factory = PolymorphExecutor
