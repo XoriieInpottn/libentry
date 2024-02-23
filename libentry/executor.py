@@ -222,8 +222,8 @@ class PolymorphExecutor(dict):
                 for obj in __config__:
                     executor.update_args(obj)
             else:
-                executor.update(__config__)
-        executor.update(kwargs)
+                executor.update_args(__config__)
+        executor.update_args(kwargs)
         return executor.execute()
 
     call = execute
