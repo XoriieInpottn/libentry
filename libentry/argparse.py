@@ -7,10 +7,11 @@
 
 import argparse
 import ast
-import logging
 import re
 from dataclasses import is_dataclass, fields
 from typing import Sequence, TypeVar, Type, Union, Optional
+
+from .logging import logger
 
 __all__ = [
     'literal_eval',
@@ -63,6 +64,8 @@ T = TypeVar('T')
 
 
 class ArgumentParser(argparse.ArgumentParser):
+    PATTERN_ARG_NAME = re.compile(r"^--?[a-zA-Z][\w\-.]*$")
+    PATTERN_ARG_PREFIX = re.compile(r"^--?")
     DATACLASS_OBJ_KEY = 'target'
 
     def __init__(self):
@@ -98,14 +101,16 @@ class ArgumentParser(argparse.ArgumentParser):
         values = []
         for arg in unknown_args:
             if arg.startswith('-'):
-                if re.match(r'^--[a-zA-Z][\w\-.]*$', arg):
+                if self.PATTERN_ARG_NAME.match(arg):
                     if name is not None:
                         d[name] = values[0] if len(values) == 1 else values
                         values = []
-                    name = arg[2:].replace('-', '_')
+                    name = self.PATTERN_ARG_PREFIX.sub("", arg).replace('-', '_')
                 else:
-                    # ignore invalid arguments
-                    logging.warning(f'Invalid argument "{arg}".')
+                    value = literal_eval(arg)
+                    if isinstance(value, str):
+                        logger.warning(f'The value "{arg}" may be incorrect.')
+                    values.append(value)
             else:
                 values.append(literal_eval(arg))
         if name is not None:
