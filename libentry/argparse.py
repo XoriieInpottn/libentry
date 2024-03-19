@@ -110,7 +110,8 @@ class ArgumentParser(argparse.ArgumentParser):
                     value = literal_eval(arg)
                     if isinstance(value, str):
                         logger.warning(f'The value "{arg}" may be incorrect.')
-                    values.append(value)
+                    if name is not None:
+                        values.append(value)
             else:
                 values.append(literal_eval(arg))
         if name is not None:
