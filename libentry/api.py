@@ -7,10 +7,20 @@ __all__ = [
     "get",
     "post",
     "list_api_info",
+    "APIClient",
 ]
 
+import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Literal, Mapping, Optional, Tuple
+from typing import Any, Callable, List, Literal, Mapping, Optional, Tuple, Union
+
+import requests
+from pydantic import BaseModel
+
+try:
+    import json5 as json
+except ImportError:
+    import json
 
 API_INFO = "__api_info__"
 
@@ -19,16 +29,24 @@ API_INFO = "__api_info__"
 class APIInfo:
     method: str = field()
     path: str = field()
-    stream_delimiter: str = field()
-    stream_prefix: str = field()
+    mime_type: str = field(default="application/json")
+    chunk_delimiter: str = field(default="\n\n")
+    chunk_prefix: str = field(default=None)
+    chunk_suffix: str = field(default=None)
+    stream_prefix: str = field(default=None)
+    stream_suffix: str = field(default=None)
     extra_info: Mapping[str, Any] = field(default_factory=dict)
 
 
 def api(
         method: Literal["GET", "POST"] = "POST",
         path: Optional[str] = None,
-        stream_delimiter: str = "\n\n",
+        mime_type: str = "application/json",
+        chunk_delimiter: str = "\n\n",
+        chunk_prefix: str = None,
+        chunk_suffix: str = None,
         stream_prefix: str = None,
+        stream_suffix: str = None,
         **kwargs
 ) -> Callable:
     def _api(fn: Callable):
@@ -42,8 +60,12 @@ def api(
         setattr(fn, API_INFO, APIInfo(
             method=method,
             path=_path,
-            stream_delimiter=stream_delimiter,
+            mime_type=mime_type,
+            chunk_delimiter=chunk_delimiter,
+            chunk_prefix=chunk_prefix,
+            chunk_suffix=chunk_suffix,
             stream_prefix=stream_prefix,
+            stream_suffix=stream_suffix,
             extra_info=kwargs
         ))
         return fn
@@ -53,30 +75,46 @@ def api(
 
 def get(
         path: Optional[str] = None,
-        stream_delimiter: str = "\n\n",
+        mime_type: str = "application/json",
+        chunk_delimiter: str = "\n\n",
+        chunk_prefix: str = None,
+        chunk_suffix: str = None,
         stream_prefix: str = None,
+        stream_suffix: str = None,
         **kwargs
 ) -> Callable:
     return api(
         method="GET",
         path=path,
-        stream_delimiter=stream_delimiter,
+        mime_type=mime_type,
+        chunk_delimiter=chunk_delimiter,
+        chunk_prefix=chunk_prefix,
+        chunk_suffix=chunk_suffix,
         stream_prefix=stream_prefix,
+        stream_suffix=stream_suffix,
         **kwargs
     )
 
 
 def post(
         path: Optional[str] = None,
-        stream_delimiter: str = "\n\n",
+        mime_type: str = "application/json",
+        chunk_delimiter: str = "\n\n",
+        chunk_prefix: str = None,
+        chunk_suffix: str = None,
         stream_prefix: str = None,
+        stream_suffix: str = None,
         **kwargs
 ) -> Callable:
     return api(
         method="POST",
         path=path,
-        stream_delimiter=stream_delimiter,
+        mime_type=mime_type,
+        chunk_delimiter=chunk_delimiter,
+        chunk_prefix=chunk_prefix,
+        chunk_suffix=chunk_suffix,
         stream_prefix=stream_prefix,
+        stream_suffix=stream_suffix,
         **kwargs
     )
 
@@ -92,3 +130,102 @@ def list_api_info(obj) -> List[Tuple[Callable, APIInfo]]:
         api_info = getattr(fn, API_INFO)
         api_list.append((fn, api_info))
     return api_list
+
+
+class APIClient:
+
+    def __init__(
+            self,
+            base_url: str,
+            api_key: str = None,
+            accept: str = "application/json",
+            content_type: str = "application/json",
+            user_agent: str = "API Client",
+            verify=True,
+            **extra_headers
+    ) -> None:
+        self.base_url = base_url
+        self.headers = {
+            "Accept": accept,
+            "Content-Type": content_type,
+            "User-Agent": user_agent,
+            **extra_headers
+        }
+        if api_key is not None:
+            self.headers["Authorization"] = f"Bearer {api_key}"
+        self.verify = verify
+
+    def get(self, path: str):
+        api_url = os.path.join(self.base_url, path)
+        resp = requests.get(api_url, headers=self.headers, verify=self.verify)
+        text = resp.text
+        try:
+            return json.loads(text)
+        except ValueError:
+            return text
+
+    def post(
+            self,
+            path: str,
+            json_data: Mapping = None,
+            stream=False,
+            chunk_delimiter: str = "\n\n",
+            chunk_prefix: str = None,
+            chunk_suffix: str = None,
+    ):
+        full_url = os.path.join(self.base_url, path)
+        resp = requests.post(
+            full_url,
+            headers=self.headers,
+            json=json_data if json_data is not None else {},
+            verify=self.verify,
+            stream=stream
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(resp.text)
+
+        if stream:
+            if chunk_delimiter is None:
+                return resp.iter_content(decode_unicode=True)
+            else:
+                def gen_chunks():
+                    for chunk in resp.iter_lines(decode_unicode=True, delimiter=chunk_delimiter):
+                        if not chunk:
+                            continue
+                        if chunk_prefix is not None and chunk.startswith(chunk_prefix):
+                            chunk = chunk[len(chunk_prefix):]
+                        if chunk_suffix is not None and chunk.endswith(chunk_suffix):
+                            chunk = chunk[:-len(chunk_suffix)]
+                        yield self._load_json(chunk)
+
+                return gen_chunks()
+        else:
+            return self._load_json(resp.text)
+
+    @staticmethod
+    def _load_json(text: str):
+        try:
+            return json.loads(text)
+        except ValueError:
+            return text
+
+    def __getattr__(self, item: str):
+        return MethodProxy(self, item)
+
+
+class MethodProxy:
+
+    def __init__(self, client: APIClient, url: str):
+        self.client = client
+        self.url = url
+
+    def __call__(self, request: Optional[Union[Mapping, BaseModel]] = None, **kwargs):
+        if request is None:
+            request = kwargs
+        elif isinstance(request, BaseModel):
+            request = request.model_dump()
+        for k, v in kwargs.items():
+            if isinstance(v, BaseModel):
+                v = v.model_dump()
+            request[k] = v
+        return self.client.post(self.url, request)

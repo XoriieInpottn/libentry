@@ -5,15 +5,18 @@ __all__ = [
     "run_service",
 ]
 
-import json
+import asyncio
 from inspect import signature
 from types import GeneratorType
-from typing import Callable, Iterable
+from typing import Callable
 
 from flask import Flask, request
+from gunicorn.app.base import BaseApplication
 from pydantic import BaseModel
 
-from libentry.api import APIInfo, list_api_info
+from .common import JSONDumper
+from ..api import APIInfo, list_api_info
+from ..logging import logger
 
 
 class FlaskWrapper:
@@ -27,6 +30,8 @@ class FlaskWrapper:
         self.app = app
         self.fn = fn
         self.api_info = api_info
+
+        self.dumper = JSONDumper(api_info)
 
         assert hasattr(fn, "__name__")
         self.__name__ = fn.__name__
@@ -47,44 +52,59 @@ class FlaskWrapper:
             response = self.fn(**input_json)
 
         if isinstance(response, (GeneratorType, range)):
-            stream = self._dump_stream_response(response)
-            return self.app.response_class(stream, mimetype="text")
+            return self.app.response_class(
+                self.dumper.dump_stream(response),
+                mimetype=self.api_info.mime_type
+            )
         else:
-            return self._dump_response(response)
-
-    def _dump_stream_response(self, response: Iterable):
-        for item in response:
-            item = self._dump_response(item)
-            if self.api_info.stream_prefix is not None:
-                item = self.api_info.stream_prefix + item
-            if self.api_info.stream_delimiter is not None:
-                item = item + self.api_info.stream_delimiter
-            yield item
-
-    @staticmethod
-    def _dump_response(response) -> str:
-        if response is None:
-            return ""
-        elif isinstance(response, BaseModel):
-            return response.model_dump_json()
-        else:
-            try:
-                return json.dumps(response)
-            except TypeError:
-                return repr(response)
+            return self.app.response_class(
+                self.dumper.dump(response),
+                mimetype=self.api_info.mime_type
+            )
 
 
-def run_service(service, host: str, port: int):
+class StandaloneApplication(BaseApplication):
+
+    def __init__(self, app, options=None):
+        self.options = options or {}
+        self.application = app
+        super().__init__()
+
+    def load_config(self):
+        config = {
+            key: value
+            for key, value in self.options.items()
+            if key in self.cfg.settings and value is not None
+        }
+        for key, value in config.items():
+            self.cfg.set(key.lower(), value)
+
+    def load(self):
+        return self.application
+
+
+def run_service(
+        service,
+        host: str,
+        port: int,
+        num_workers: int = 1,
+        num_threads: int = 10,
+        timeout: int = 0
+):
+    logger.info("Parsing APIs")
     api_info_list = list_api_info(service)
     if len(api_info_list) == 0:
-        print("No API found, nothing to serve.")
+        logger.error("No API found, nothing to serve.")
         return
 
     app = Flask(__name__)
     for fn, api_info in api_info_list:
         method = api_info.method
         path = api_info.path
-        print(method, path)
+        if asyncio.iscoroutinefunction(fn):
+            logger.error(f"Async function \"{fn.__name__}\" is not supported.")
+            continue
+        logger.info(f"Serve API-{method} for {path}")
 
         wrapped_fn = FlaskWrapper(app, fn, api_info)
         if method == "GET":
@@ -93,4 +113,14 @@ def run_service(service, host: str, port: int):
             app.post(path)(wrapped_fn)
         else:
             raise RuntimeError(f"Unsupported method \"{method}\" for ")
-    app.run(host, port, threaded=True)
+
+    logger.info("Starting server")
+    options = {
+        "bind": f"{host}:{port}",
+        "workers": num_workers,
+        "threaded": num_threads,
+        "timeout": timeout,
+    }
+    for name, value in options.items():
+        logger.info(f"Option {name}: {value}")
+    StandaloneApplication(app, options).run()
