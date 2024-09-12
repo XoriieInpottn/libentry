@@ -118,7 +118,7 @@ def run_service(
     options = {
         "bind": f"{host}:{port}",
         "workers": num_workers,
-        "threaded": num_threads,
+        "threads": num_threads,
         "timeout": timeout,
     }
     for name, value in options.items():

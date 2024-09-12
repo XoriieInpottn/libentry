@@ -9,8 +9,9 @@ if __name__ == '__main__':
         name='libentry',
         packages=[
             'libentry',
+            "libentry.service"
         ],
-        version='1.8.5',
+        version='1.9.2',
         description='Entries for experimental utilities.',
         long_description_content_type='text/markdown',
         long_description=long_description,
