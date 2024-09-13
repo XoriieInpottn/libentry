@@ -141,6 +141,7 @@ class APIClient:
             accept: str = "application/json",
             content_type: str = "application/json",
             user_agent: str = "API Client",
+            connection: str = "close",
             verify=True,
             **extra_headers
     ) -> None:
@@ -149,6 +150,7 @@ class APIClient:
             "Accept": accept,
             "Content-Type": content_type,
             "User-Agent": user_agent,
+            "Connection": connection,
             **extra_headers
         }
         if api_key is not None:

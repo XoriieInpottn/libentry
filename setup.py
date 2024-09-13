@@ -11,7 +11,7 @@ if __name__ == '__main__':
             'libentry',
             "libentry.service"
         ],
-        version='1.9.2',
+        version='1.9.3',
         description='Entries for experimental utilities.',
         long_description_content_type='text/markdown',
         long_description=long_description,
@@ -26,11 +26,12 @@ if __name__ == '__main__':
         include_package_data=True,
         zip_safe=True,
         install_requires=[
+            "requests",
+            "json5",
+            "pydantic",
             "Flask",
             "gunicorn",
-            "pydantic",
             "uvicorn",
             "fastapi",
-            "requests",
         ]
     )
