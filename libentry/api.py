@@ -155,52 +155,63 @@ class APIClient:
             self.headers["Authorization"] = f"Bearer {api_key}"
         self.verify = verify
 
-    def get(self, path: str):
+    def get(self, path: str, timeout=60):
         api_url = os.path.join(self.base_url, path)
-        resp = requests.get(api_url, headers=self.headers, verify=self.verify)
-        text = resp.text
+        response = requests.get(api_url, headers=self.headers, verify=self.verify, timeout=timeout)
+
+        if response.status_code != 200:
+            raise RuntimeError(response.text)
+
         try:
-            return json.loads(text)
-        except ValueError:
-            return text
+            return self._load_json(response.text)
+        finally:
+            response.close()
 
     def post(
             self,
             path: str,
             json_data: Mapping = None,
             stream=False,
+            timeout=60,
             chunk_delimiter: str = "\n\n",
             chunk_prefix: str = None,
             chunk_suffix: str = None,
     ):
         full_url = os.path.join(self.base_url, path)
-        resp = requests.post(
+        response = requests.post(
             full_url,
             headers=self.headers,
             json=json_data if json_data is not None else {},
             verify=self.verify,
-            stream=stream
+            stream=stream,
+            timeout=timeout
         )
-        if resp.status_code != 200:
-            raise RuntimeError(resp.text)
+        if response.status_code != 200:
+            raise RuntimeError(response.text)
 
         if stream:
             if chunk_delimiter is None:
-                return resp.iter_content(decode_unicode=True)
+                return response.iter_content(decode_unicode=True)
             else:
-                def gen_chunks():
-                    for chunk in resp.iter_lines(decode_unicode=True, delimiter=chunk_delimiter):
-                        if not chunk:
-                            continue
-                        if chunk_prefix is not None and chunk.startswith(chunk_prefix):
-                            chunk = chunk[len(chunk_prefix):]
-                        if chunk_suffix is not None and chunk.endswith(chunk_suffix):
-                            chunk = chunk[:-len(chunk_suffix)]
-                        yield self._load_json(chunk)
+                def _iter_chunks():
+                    try:
+                        for chunk in response.iter_lines(decode_unicode=True, delimiter=chunk_delimiter):
+                            if not chunk:
+                                continue
+                            if chunk_prefix is not None and chunk.startswith(chunk_prefix):
+                                chunk = chunk[len(chunk_prefix):]
+                            if chunk_suffix is not None and chunk.endswith(chunk_suffix):
+                                chunk = chunk[:-len(chunk_suffix)]
+                            yield self._load_json(chunk)
+                    finally:
+                        response.close()
 
-                return gen_chunks()
+                return _iter_chunks()
         else:
-            return self._load_json(resp.text)
+            try:
+                return self._load_json(response.text)
+            finally:
+                response.close()
 
     @staticmethod
     def _load_json(text: str):

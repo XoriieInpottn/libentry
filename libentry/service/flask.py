@@ -89,7 +89,8 @@ def run_service(
         port: int,
         num_workers: int = 1,
         num_threads: int = 10,
-        timeout: int = 0
+        num_connections: int = 2000,
+        timeout: int = 60
 ):
     logger.info("Parsing APIs")
     api_info_list = list_api_info(service)
@@ -120,6 +121,7 @@ def run_service(
         "workers": num_workers,
         "threads": num_threads,
         "timeout": timeout,
+        "worker_connections": num_connections,
     }
     for name, value in options.items():
         logger.info(f"Option {name}: {value}")
