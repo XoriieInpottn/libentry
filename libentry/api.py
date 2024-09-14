@@ -17,10 +17,7 @@ from typing import Any, Callable, List, Literal, Mapping, Optional, Tuple, Union
 import requests
 from pydantic import BaseModel
 
-try:
-    import json5 as json
-except ImportError:
-    import json
+from . import json
 
 API_INFO = "__api_info__"
 
@@ -180,10 +177,12 @@ class APIClient:
             chunk_suffix: str = None,
     ):
         full_url = os.path.join(self.base_url, path)
+
+        data = json.dumps(json_data) if json_data is not None else None
         response = requests.post(
             full_url,
             headers=self.headers,
-            json=json_data if json_data is not None else {},
+            data=data,
             verify=self.verify,
             stream=stream,
             timeout=timeout

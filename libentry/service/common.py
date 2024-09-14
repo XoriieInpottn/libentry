@@ -4,11 +4,11 @@ __all__ = [
     "JSONDumper"
 ]
 
-import json
 from typing import Iterable
 
 from pydantic import BaseModel
 
+from .. import json
 from ..api import APIInfo
 
 
@@ -49,7 +49,7 @@ class JSONDumper:
         if response is None:
             return ""
         elif isinstance(response, BaseModel):
-            return response.model_dump_json()
+            return json.dumps(response.model_dump())
         else:
             try:
                 return json.dumps(response)

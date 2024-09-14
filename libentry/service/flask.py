@@ -15,6 +15,7 @@ from gunicorn.app.base import BaseApplication
 from pydantic import BaseModel
 
 from .common import JSONDumper
+from .. import json
 from ..api import APIInfo, list_api_info
 from ..logging import logger
 
@@ -44,7 +45,7 @@ class FlaskWrapper:
                     self.input_schema = value.annotation
 
     def __call__(self):
-        input_json = request.json
+        input_json = json.loads(request.data)
         if self.input_schema is not None:
             input_data = self.input_schema.model_validate(input_json)
             response = self.fn(input_data)
