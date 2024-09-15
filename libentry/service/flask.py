@@ -45,7 +45,7 @@ class FlaskWrapper:
                     self.input_schema = value.annotation
 
     def __call__(self):
-        input_json = json.loads(request.data)
+        input_json = json.loads(request.data) if request.data else {}
         if self.input_schema is not None:
             input_data = self.input_schema.model_validate(input_json)
             response = self.fn(input_data)
