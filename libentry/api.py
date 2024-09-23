@@ -12,7 +12,7 @@ __all__ = [
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Literal, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
 import requests
 from pydantic import BaseModel
@@ -192,27 +192,48 @@ class APIClient:
 
         if stream:
             if chunk_delimiter is None:
+                # TODO: this branch is not tested yet!
                 return response.iter_content(decode_unicode=True)
             else:
-                def _iter_chunks():
-                    try:
-                        for chunk in response.iter_lines(decode_unicode=True, delimiter=chunk_delimiter):
-                            if not chunk:
-                                continue
-                            if chunk_prefix is not None and chunk.startswith(chunk_prefix):
-                                chunk = chunk[len(chunk_prefix):]
-                            if chunk_suffix is not None and chunk.endswith(chunk_suffix):
-                                chunk = chunk[:-len(chunk_suffix)]
-                            yield self._load_json(chunk)
-                    finally:
-                        response.close()
-
-                return _iter_chunks()
+                return self._iter_chunks(
+                    response=response,
+                    chunk_delimiter=chunk_delimiter.encode() if chunk_delimiter else None,
+                    chunk_prefix=chunk_prefix.encode() if chunk_prefix else None,
+                    chunk_suffix=chunk_suffix.encode() if chunk_suffix else None,
+                )
         else:
             try:
                 return self._load_json(response.text)
             finally:
                 response.close()
+
+    def _iter_chunks(
+            self,
+            response: requests.Response,
+            chunk_delimiter: bytes,
+            chunk_prefix: bytes,
+            chunk_suffix: bytes
+    ) -> Iterable:
+        try:
+            for chunk in response.iter_lines(decode_unicode=False, delimiter=chunk_delimiter):
+                if not chunk:
+                    continue
+
+                if chunk_prefix is not None:
+                    if chunk.startswith(chunk_prefix):
+                        chunk = chunk[len(chunk_prefix):]
+                    else:
+                        continue
+
+                if chunk_suffix is not None:
+                    if chunk.endswith(chunk_suffix):
+                        chunk = chunk[:-len(chunk_suffix)]
+                    else:
+                        continue
+
+                yield self._load_json(chunk)
+        finally:
+            response.close()
 
     @staticmethod
     def _load_json(text: str):
