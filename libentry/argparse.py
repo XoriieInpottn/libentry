@@ -18,6 +18,7 @@ import re
 from dataclasses import fields, is_dataclass
 from typing import Optional, Sequence, Type
 
+import yaml
 from pydantic import BaseModel
 
 
@@ -59,6 +60,142 @@ def _fill_value(known_args, name, values):
 
     known_args.__dict__[name] = values[0] if len(values) == 1 else values
 
+
+class DefaultValue:
+
+    def __init__(self, value):
+        self.value = value
+
+    def __repr__(self):
+        return repr(self.value)
+
+
+class ArgumentParser(argparse.ArgumentParser):
+
+    def __init__(
+            self,
+            prog=None,
+            usage=None,
+            description=None,
+            epilog=None,
+            parents=(),
+            formatter_class=argparse.HelpFormatter,
+            prefix_chars='-',
+            fromfile_prefix_chars=None,
+            argument_default=None,
+            conflict_handler='error',
+            add_help=True,
+            allow_abbrev=True
+    ) -> None:
+        super().__init__(
+            prog=prog,
+            usage=usage,
+            description=description,
+            epilog=epilog,
+            parents=parents,
+            formatter_class=formatter_class,
+            prefix_chars=prefix_chars,
+            fromfile_prefix_chars=fromfile_prefix_chars,
+            argument_default=argument_default,
+            conflict_handler=conflict_handler,
+            add_help=add_help,
+            allow_abbrev=allow_abbrev,
+        )
+        self.schema_dict = {}
+
+    def add_schema(self, name: str, schema: Type[BaseModel]):
+        self.add_argument(f"--{name}")
+        if name in self.schema_dict:
+            raise ValueError(f"Schema \"{name}\" exists.")
+        self.schema_dict[name] = schema
+        self._add_schema(name, schema)
+
+    def _add_schema(self, prefix: str, schema: Type[BaseModel]):
+        for name, info in schema.model_fields.items():
+            if isinstance(info.annotation, type) and issubclass(info.annotation, BaseModel):
+                self._add_schema(f"{prefix}.{name}", info.annotation)
+            else:
+                self.add_argument(
+                    f"--{prefix}.{name}",
+                    type=literal_eval,
+                    default=DefaultValue(info.default),
+                    # required=info.is_required(),
+                    help=info.description
+                )
+
+    def parse_args(self, args=None, namespace=None):
+        args = super().parse_args(args=None, namespace=None)
+
+        config_flat_dict = {}
+        for name in self.schema_dict:
+            config_file = args.__dict__[name]
+            if config_file is not None:
+                with open(config_file, "r") as f:
+                    config_json = yaml.load(f, yaml.FullLoader)
+                    self._json_flatten(name, config_json, config_flat_dict)
+
+        args_flat_dict = {
+            name: value
+            for name, value in args.__dict__.items()
+            if "." in name
+        }
+
+        merged_flat_dict = {**config_flat_dict}
+        for name, value in args_flat_dict.items():
+            if name not in merged_flat_dict:
+                if isinstance(value, DefaultValue):
+                    value = value.value
+                merged_flat_dict[name] = value
+            else:
+                if not isinstance(value, DefaultValue):
+                    merged_flat_dict[name] = value
+
+        merged_json = {}
+        self._json_unflatten(merged_flat_dict, merged_json)
+
+        for name, schema in self.schema_dict.items():
+            model = schema.model_validate(merged_json[name])
+            args.__dict__[name] = model
+        return args
+
+    @staticmethod
+    def _json_flatten(prefix: str, json: dict, output: dict):
+        for name, value in json.items():
+            if isinstance(value, dict):
+                ArgumentParser._json_flatten(f"{prefix}.{name}", value, output)
+            else:
+                output[f"{prefix}.{name}"] = value
+
+    @staticmethod
+    def _json_unflatten(flat_dict: dict, output: dict):
+        for name, value in flat_dict.items():
+            path_list = name.split(".")
+            sub_json = output
+            for prefix in path_list[:-1]:
+                if prefix not in sub_json:
+                    sub_json[prefix] = {}
+                sub_json = sub_json[prefix]
+            sub_json[path_list[-1]] = value
+
+
+def inject_fields(dst, src, blacklist: Optional[Sequence[str]] = None):
+    dst_field_names = {*_list_field_names(dst)}
+    for name in _list_field_names(src):
+        if blacklist and name in blacklist:
+            continue
+        if name in dst_field_names:
+            value = getattr(src, name)
+            setattr(dst, name, value)
+    return dst
+
+
+def _list_field_names(obj):
+    if is_dataclass(obj):
+        return [_field.name for _field in fields(obj)]
+    elif isinstance(obj, BaseModel):
+        return [*obj.model_fields]
+    else:
+        return [obj.__dict__]
 
 # T = TypeVar('T')
 #
@@ -139,92 +276,3 @@ def _fill_value(known_args, name, values):
 #                 setattr(obj, sections[-1], value)
 #
 #         return args
-
-
-class ArgumentParser(argparse.ArgumentParser):
-
-    def __init__(
-            self,
-            prog=None,
-            usage=None,
-            description=None,
-            epilog=None,
-            parents=(),
-            formatter_class=argparse.HelpFormatter,
-            prefix_chars='-',
-            fromfile_prefix_chars=None,
-            argument_default=None,
-            conflict_handler='error',
-            add_help=True,
-            allow_abbrev=True
-    ) -> None:
-        super().__init__(
-            prog=prog,
-            usage=usage,
-            description=description,
-            epilog=epilog,
-            parents=parents,
-            formatter_class=formatter_class,
-            prefix_chars=prefix_chars,
-            fromfile_prefix_chars=fromfile_prefix_chars,
-            argument_default=argument_default,
-            conflict_handler=conflict_handler,
-            add_help=add_help,
-            allow_abbrev=allow_abbrev,
-        )
-        self.schema_dict = {}
-
-    def add_schema(self, prefix: str, schema: Type[BaseModel]):
-        if issubclass(schema, BaseModel):
-            self._add_schema(prefix, schema)
-            self.schema_dict[prefix] = schema
-
-    def _add_schema(self, prefix: str, schema: Type[BaseModel]):
-        for name, info in schema.model_fields.items():
-            if issubclass(info.annotation, BaseModel):
-                self._add_schema(f"{prefix}.{name}", info.annotation)
-            else:
-                self.add_argument(
-                    f"--{prefix}.{name}",
-                    type=literal_eval,
-                    default=info.default,
-                    required=info.is_required(),
-                    help=info.description
-                )
-
-    def parse_args(self, args=None, namespace=None):
-        args = super().parse_args(args=None, namespace=None)
-        json_args = {}
-        for name, value in args.__dict__.items():
-            path_list = name.split(".")
-            sub_json = json_args
-            for prefix in path_list[:-1]:
-                if prefix not in sub_json:
-                    sub_json[prefix] = {}
-                sub_json = sub_json[prefix]
-            sub_json[path_list[-1]] = value
-
-        for name, schema in self.schema_dict.items():
-            model = schema.model_validate(json_args[name])
-            args.__dict__[name] = model
-        return args
-
-
-def inject_fields(dst, src, blacklist: Optional[Sequence[str]] = None):
-    dst_field_names = {*_list_field_names(dst)}
-    for name in _list_field_names(src):
-        if blacklist and name in blacklist:
-            continue
-        if name in dst_field_names:
-            value = getattr(src, name)
-            setattr(dst, name, value)
-    return dst
-
-
-def _list_field_names(obj):
-    if is_dataclass(obj):
-        return [_field.name for _field in fields(obj)]
-    elif isinstance(obj, BaseModel):
-        return [*obj.model_fields]
-    else:
-        return [obj.__dict__]
