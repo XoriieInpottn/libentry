@@ -16,7 +16,7 @@ import argparse
 import ast
 import re
 from dataclasses import fields, is_dataclass
-from typing import Optional, Sequence, Type
+from typing import Optional, Sequence, Type, Union, get_args, get_origin
 
 import yaml
 from pydantic import BaseModel
@@ -103,17 +103,41 @@ class ArgumentParser(argparse.ArgumentParser):
         )
         self.schema_dict = {}
 
-    def add_schema(self, name: str, schema: Type[BaseModel]):
+    def add_schema(self, name: str, schema: Type[BaseModel], default: Union[str, BaseModel] = None):
+        if default is not None:
+            if isinstance(default, str):
+                default_json = yaml.load(default, yaml.FullLoader)
+            elif isinstance(default, BaseModel):
+                default_json = default.model_dump()
+            else:
+                raise TypeError(f"Invalid default type {type(default)}.")
+            default_flat_dict = {}
+            self._json_flatten(name, default_json, default_flat_dict)
+            default = default_flat_dict
+
         self.add_argument(f"--{name}")
         if name in self.schema_dict:
             raise ValueError(f"Schema \"{name}\" exists.")
-        self.schema_dict[name] = schema
+        self.schema_dict[name] = (schema, default)
         self._add_schema(name, schema)
 
     def _add_schema(self, prefix: str, schema: Type[BaseModel]):
         for name, info in schema.model_fields.items():
-            if isinstance(info.annotation, type) and issubclass(info.annotation, BaseModel):
-                self._add_schema(f"{prefix}.{name}", info.annotation)
+            anno = info.annotation
+            nested = False
+
+            if isinstance(anno, type) and issubclass(anno, BaseModel):
+                nested = True
+
+            if get_origin(anno) is Union and any(issubclass(t, BaseModel) for t in get_args(anno)):
+                for t in get_args(anno):
+                    if issubclass(t, BaseModel):
+                        nested = True
+                        anno = t
+                        break
+
+            if nested:
+                self._add_schema(f"{prefix}.{name}", anno)
             else:
                 self.add_argument(
                     f"--{prefix}.{name}",
@@ -127,7 +151,10 @@ class ArgumentParser(argparse.ArgumentParser):
         args = super().parse_args(args=None, namespace=None)
 
         config_flat_dict = {}
-        for name in self.schema_dict:
+        for name, (_, default) in self.schema_dict.items():
+            if default is not None:
+                config_flat_dict.update(default)
+
             config_file = args.__dict__[name]
             if config_file is not None:
                 with open(config_file, "r") as f:
@@ -153,7 +180,7 @@ class ArgumentParser(argparse.ArgumentParser):
         merged_json = {}
         self._json_unflatten(merged_flat_dict, merged_json)
 
-        for name, schema in self.schema_dict.items():
+        for name, (schema, _) in self.schema_dict.items():
             model = schema.model_validate(merged_json[name])
             args.__dict__[name] = model
         return args
