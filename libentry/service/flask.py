@@ -64,6 +64,47 @@ class FlaskWrapper:
             )
 
 
+class FlaskServer(Flask):
+
+    def __init__(self, service):
+        super().__init__(__name__)
+        self.service = service
+
+        logger.info("Initializing Flask application.")
+        self.api_info_list = list_api_info(service)
+        if len(self.api_info_list) == 0:
+            logger.error("No API found, nothing to serve.")
+            return
+
+        for fn, api_info in self.api_info_list:
+            method = api_info.method
+            path = api_info.path
+            if asyncio.iscoroutinefunction(fn):
+                logger.error(f"Async function \"{fn.__name__}\" is not supported.")
+                continue
+            logger.info(f"Serving {method}-API for {path}")
+
+            wrapped_fn = FlaskWrapper(self, fn, api_info)
+            if method == "GET":
+                self.get(path)(wrapped_fn)
+            elif method == "POST":
+                self.post(path)(wrapped_fn)
+            else:
+                raise RuntimeError(f"Unsupported method \"{method}\" for ")
+        logger.info("Flask application initialized.")
+
+        self.get("/")(self.index)
+
+    def index(self):
+        all_api = []
+        for _, api_info in self.api_info_list:
+            all_api.append({"path": api_info.path})
+        return self.response_class(
+            json.dumps(all_api, indent=4),
+            mimetype="application/json"
+        )
+
+
 class GunicornApplication(BaseApplication):
 
     def __init__(self, service_type, service_config=None, options=None):
@@ -95,30 +136,7 @@ class GunicornApplication(BaseApplication):
             raise TypeError(f"Invalid service type \"{type(self.service_type)}\".")
         logger.info("Service initialized.")
 
-        logger.info("Initializing Flask application.")
-        api_info_list = list_api_info(service)
-        if len(api_info_list) == 0:
-            logger.error("No API found, nothing to serve.")
-            return
-
-        app = Flask(__name__)
-        for fn, api_info in api_info_list:
-            method = api_info.method
-            path = api_info.path
-            if asyncio.iscoroutinefunction(fn):
-                logger.error(f"Async function \"{fn.__name__}\" is not supported.")
-                continue
-            logger.info(f"Serving {method}-API for {path}")
-
-            wrapped_fn = FlaskWrapper(app, fn, api_info)
-            if method == "GET":
-                app.get(path)(wrapped_fn)
-            elif method == "POST":
-                app.post(path)(wrapped_fn)
-            else:
-                raise RuntimeError(f"Unsupported method \"{method}\" for ")
-        logger.info("Flask application initialized.")
-        return app
+        return FlaskServer(service)
 
 
 def run_service(
