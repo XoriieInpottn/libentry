@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 
+__author__ = "xi"
 __all__ = [
-    "JSONDumper"
+    "JSONDumper",
 ]
 
 from typing import Iterable
 
 from pydantic import BaseModel
 
-from .. import json
-from ..api import APIInfo
+from libentry import json
+from libentry.api import APIInfo
 
 
 class JSONDumper:

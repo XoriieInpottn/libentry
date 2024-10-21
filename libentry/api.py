@@ -17,7 +17,7 @@ from typing import Any, Callable, Iterable, List, Literal, Mapping, Optional, Tu
 import requests
 from pydantic import BaseModel
 
-from . import json
+from libentry import json
 
 API_INFO = "__api_info__"
 

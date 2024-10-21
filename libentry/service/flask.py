@@ -14,10 +14,10 @@ from flask import Flask, request
 from gunicorn.app.base import BaseApplication
 from pydantic import BaseModel
 
-from .common import JSONDumper
-from .. import json
-from ..api import APIInfo, list_api_info
-from ..logging import logger
+from libentry import json
+from libentry.api import APIInfo, list_api_info
+from libentry.logging import logger
+from libentry.service.common import JSONDumper
 
 
 class FlaskWrapper:

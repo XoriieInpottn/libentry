@@ -12,7 +12,6 @@ from base64 import b64decode, b64encode
 from functools import partial
 
 import numpy as np
-from pydantic import BaseModel
 
 
 def encode_ndarray(a: np.ndarray):

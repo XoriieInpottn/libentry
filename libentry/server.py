@@ -3,9 +3,9 @@
 import os
 from socketserver import ThreadingMixIn
 from threading import Thread
-from xmlrpc.server import SimpleXMLRPCServer, SimpleXMLRPCRequestHandler
+from xmlrpc.server import SimpleXMLRPCRequestHandler, SimpleXMLRPCServer
 
-from .logging import logger
+from libentry.logging import logger
 
 __all__ = [
     'XMLRPCServerMixIn',
