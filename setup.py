@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+__author__ = "xi"
+
 from setuptools import setup
 
 if __name__ == '__main__':
@@ -27,12 +29,10 @@ if __name__ == '__main__':
         zip_safe=True,
         install_requires=[
             "requests",
-            "json5",
             "pydantic",
+            "json5",
+            "PyYAML",
             "Flask",
             "gunicorn",
-            "uvicorn",
-            "fastapi",
-            "PyYAML",
         ]
     )
