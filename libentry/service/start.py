@@ -6,37 +6,35 @@ import os
 import shlex
 import subprocess
 
-import psutil
-import yaml
-
 from libentry import ArgumentParser, logger
-from libentry.service.common import RunningConfig, RunningStatus
-from libentry.service.running_utils import load_running, save_running
-
-
-def is_running(pid: int):
-    try:
-        return psutil.Process(pid).is_running()
-    except psutil.NoSuchProcess:
-        return False
+from libentry.service.running_utils import RunningConfig, RunningStatus
 
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument("--config_file", "-f", required=True)
+    parser.add_argument("config_file", nargs="?")
+    parser.add_argument("--dir_path", "-d")
     parser.add_argument("--shell", default="/bin/bash -c")
     args = parser.parse_args()
 
-    if not os.path.exists(args.config_file):
-        logger.fatal(f"Config file \"{args.config_file}\" does not exist.")
-        return -1
-    with open(args.config_file) as f:
-        config = RunningConfig.model_validate(yaml.safe_load(f))
-    os.chdir(os.path.abspath(os.path.dirname(args.config_file)))
+    if args.config_file is None:
+        return 0
 
-    status = load_running(config.name)
-    if status is not None and is_running(status.pid):
-        logger.fatal(f"Service \"{status.config.name}\" is already running.")
+    status = RunningStatus.load(args.config_file, dir_path=args.dir_path)
+    if status is None:
+        config = RunningConfig.load(args.config_file)
+        if config is None:
+            print(f"No such service \"{args.config_file}\".")
+            return -1
+        args.config_file = os.path.abspath(args.config_file)
+        os.chdir(os.path.abspath(os.path.dirname(args.config_file)))
+        status = RunningStatus.load(config.name, dir_path=args.dir_path)
+    else:
+        config = status.config
+        os.chdir(os.path.abspath(os.path.dirname(status.config_path)))
+
+    if status is not None and status.is_running():
+        print(f"Service \"{status.config.name}\" is already running.")
         return -1
 
     envs = None
@@ -70,8 +68,15 @@ def main():
     pgid = os.getpgid(pid)
     logger.info(f"Service \"{config.name}\" started at process {pgid}.")
 
-    status = RunningStatus(config_path=os.path.abspath(args.config_file), config=config, pid=pid)
-    save_running(status)
+    if status is None:
+        status = RunningStatus(
+            config_path=os.path.abspath(args.config_file),
+            config=config,
+            pid=pid
+        )
+    else:
+        status.pid = pid
+    status.save()
     return 0
 
 
