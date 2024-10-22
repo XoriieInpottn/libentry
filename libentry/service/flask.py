@@ -12,7 +12,7 @@ from typing import Callable, Iterable, Type, Union
 
 from flask import Flask, request
 from gunicorn.app.base import BaseApplication
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, create_model
 
 from libentry import json
 from libentry.api import APIInfo, list_api_info
@@ -64,11 +64,28 @@ class JSONDumper:
                 return repr(response)
 
 
+def create_model_from_signature(fn):
+    sig = signature(fn)
+
+    fields = {}
+    for name, param in sig.parameters.items():
+        if name in ["self", "cls"]:
+            continue
+        if param.default is not param.empty:
+            fields[name] = (param.annotation, param.default)
+        elif param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+            fields[name] = (param.annotation, None)
+        else:
+            fields[name] = (param.annotation, Field())
+    fields["return"] = (sig.return_annotation, None)
+    return create_model(f"__{fn.__name__}_signature", **fields)
+
+
 class FlaskWrapper:
 
     def __init__(
             self,
-            app: Flask,
+            app: "FlaskServer",
             fn: Callable,
             api_info: APIInfo
     ):
@@ -140,13 +157,28 @@ class FlaskServer(Flask):
         self.get("/")(self.index)
 
     def index(self):
-        all_api = []
-        for _, api_info in self.api_info_list:
-            all_api.append({"path": api_info.path})
-        return self.response_class(
-            json.dumps(all_api, indent=4),
-            mimetype="application/json"
-        )
+        args = request.args
+        if "name" not in args:
+            all_api = []
+            for _, api_info in self.api_info_list:
+                all_api.append({"path": api_info.path})
+            return self.ok(json.dumps(all_api, indent=4))
+
+        name = args["name"]
+        for fn, api_info in self.api_info_list:
+            if api_info.path == "/" + name:
+                # noinspection PyTypeChecker
+                dynamic_model = create_model_from_signature(fn)
+                schema = dynamic_model.model_json_schema()
+                return self.ok(json.dumps(schema, indent=4))
+
+        return self.error(f"No API named \"{name}\"")
+
+    def ok(self, body: str, mimetype="application/json"):
+        return self.response_class(body, status=200, mimetype=mimetype)
+
+    def error(self, body: str, mimetype="text"):
+        return self.response_class(body, status=500, mimetype=mimetype)
 
 
 class GunicornApplication(BaseApplication):
