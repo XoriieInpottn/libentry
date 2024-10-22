@@ -50,6 +50,25 @@ class RunningConfig(BaseModel):
         return None
 
 
+def get_children(pid: int, recursive=True, pids: List[int] = None) -> List[int]:
+    if pids is None:
+        pids = psutil.pids()
+
+    output_list = []
+    for _pid in pids:
+        try:
+            if psutil.Process(_pid).ppid() == pid:
+                output_list.append(_pid)
+        except psutil.NoSuchProcess:
+            continue
+
+    if recursive:
+        cpid_list = [*output_list]
+        for cpid in cpid_list:
+            output_list += get_children(cpid, True, pids)
+    return output_list
+
+
 class RunningStatus(BaseModel):
     config_path: str = Field()
     config: RunningConfig = Field()
@@ -102,28 +121,21 @@ class RunningStatus(BaseModel):
             return False
 
     def kill(self):
-        proc = psutil.Process(self.pid)
-
-        children = []
-        for pid in psutil.pids():
+        cpid_list = get_children(self.pid, recursive=False)
+        cpid_list.sort()
+        for cpid in cpid_list:
             try:
-                child = psutil.Process(pid)
-            except psutil.NoSuchProcess:
-                continue
-            if child.ppid() == proc.pid:
-                children.append(child)
-        children.sort(key=lambda p: p.pid)
-
-        for child in children:
-            try:
+                child = psutil.Process(cpid)
                 child.kill()
+                while child.is_running():
+                    sleep(1)
             except psutil.NoSuchProcess:
                 continue
-            while child.is_running():
-                sleep(1)
+
         try:
+            proc = psutil.Process(self.pid)
             proc.kill()
+            while proc.is_running():
+                sleep(1)
         except psutil.NoSuchProcess:
             pass
-        while proc.is_running():
-            sleep(1)
