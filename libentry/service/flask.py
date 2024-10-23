@@ -12,7 +12,7 @@ from typing import Callable, Iterable, Type, Union
 
 from flask import Flask, request
 from gunicorn.app.base import BaseApplication
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, Field, ValidationError, create_model
 
 from libentry import json
 from libentry.api import APIInfo, list_api_info
@@ -106,12 +106,28 @@ class FlaskWrapper:
                     self.input_schema = value.annotation
 
     def __call__(self):
-        input_json = json.loads(request.data) if request.data else {}
-        if self.input_schema is not None:
-            input_data = self.input_schema.model_validate(input_json)
-            response = self.fn(input_data)
+        if request.method == "POST":
+            input_json = json.loads(request.data) if request.data else {}
+        elif request.method == "GET":
+            input_json = {**request.args}
         else:
-            response = self.fn(**input_json)
+            return self.app.error(f"Unsupported method \"{request.method}\".")
+
+        if self.input_schema is not None:
+            try:
+                input_data = self.input_schema.model_validate(input_json)
+                response = self.fn(input_data)
+            except Exception as e:
+                if isinstance(e, (SystemExit, KeyboardInterrupt)):
+                    raise e
+                return self.app.error(str(e))
+        else:
+            try:
+                response = self.fn(**input_json)
+            except Exception as e:
+                if isinstance(e, (SystemExit, KeyboardInterrupt)):
+                    raise e
+                return self.app.error(str(e))
 
         if isinstance(response, (GeneratorType, range)):
             return self.app.response_class(
