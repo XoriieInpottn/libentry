@@ -13,6 +13,7 @@ from typing import Callable, Iterable, Optional, Type, Union
 from flask import Flask, request
 from gunicorn.app.base import BaseApplication
 from pydantic import BaseModel, Field, create_model
+from pydantic.json_schema import GenerateJsonSchema
 
 from libentry import json
 from libentry.api import APIInfo, list_api_info
@@ -141,6 +142,14 @@ class FlaskWrapper:
             )
 
 
+class CustomGenerateJsonSchema(GenerateJsonSchema):
+
+    def handle_invalid_for_json_schema(self, schema, error_info: str):
+        cls = schema.get("cls")
+        cls_name = f"{cls.__module__}.{cls.__name__}" if cls is not None else "UNKNOWN"
+        return {"type": cls_name}
+
+
 class FlaskServer(Flask):
 
     def __init__(self, service):
@@ -185,7 +194,7 @@ class FlaskServer(Flask):
             if api_info.path == "/" + name:
                 # noinspection PyTypeChecker
                 dynamic_model = create_model_from_signature(fn)
-                schema = dynamic_model.model_json_schema()
+                schema = dynamic_model.model_json_schema(schema_generator=CustomGenerateJsonSchema)
                 return self.ok(json.dumps(schema, indent=4))
 
         return self.error(f"No API named \"{name}\"")
