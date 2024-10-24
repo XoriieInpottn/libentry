@@ -139,7 +139,7 @@ class APIClient:
             content_type: str = "application/json",
             user_agent: str = "API Client",
             connection: str = "close",
-            verify=True,
+            verify=False,
             **extra_headers
     ) -> None:
         self.base_url = base_url
