@@ -8,11 +8,11 @@ __all__ = [
 import asyncio
 from inspect import signature
 from types import GeneratorType
-from typing import Callable, Iterable, Type, Union
+from typing import Callable, Iterable, Optional, Type, Union
 
 from flask import Flask, request
 from gunicorn.app.base import BaseApplication
-from pydantic import BaseModel, Field, ValidationError, create_model
+from pydantic import BaseModel, Field, create_model
 
 from libentry import json
 from libentry.api import APIInfo, list_api_info
@@ -239,7 +239,9 @@ def run_service(
         num_workers: int = 1,
         num_threads: int = 10,
         num_connections: int = 2000,
-        timeout: int = 60
+        timeout: int = 60,
+        keyfile: Optional[str] = None,
+        certfile: Optional[str] = None
 ):
     logger.info("Starting gunicorn server.")
     options = {
@@ -248,6 +250,8 @@ def run_service(
         "threads": num_threads,
         "timeout": timeout,
         "worker_connections": num_connections,
+        "keyfile": keyfile,
+        "certfile": certfile,
     }
     for name, value in options.items():
         logger.info(f"Option {name}: {value}")
