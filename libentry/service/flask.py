@@ -6,6 +6,7 @@ __all__ = [
 ]
 
 import asyncio
+import traceback
 from inspect import signature
 from types import GeneratorType
 from typing import Callable, Iterable, Optional, Type, Union
@@ -121,14 +122,14 @@ class FlaskWrapper:
             except Exception as e:
                 if isinstance(e, (SystemExit, KeyboardInterrupt)):
                     raise e
-                return self.app.error(str(e))
+                return self.app.error(self.make_err(e))
         else:
             try:
                 response = self.fn(**input_json)
             except Exception as e:
                 if isinstance(e, (SystemExit, KeyboardInterrupt)):
                     raise e
-                return self.app.error(str(e))
+                return self.app.error(self.make_err(e))
 
         if isinstance(response, (GeneratorType, range)):
             return self.app.response_class(
@@ -140,6 +141,19 @@ class FlaskWrapper:
                 self.dumper.dump(response),
                 mimetype=self.api_info.mime_type
             )
+
+    @staticmethod
+    def make_err(e):
+        err_cls = e.__class__
+        err_name = err_cls.__name__
+        module = err_cls.__module__
+        if module != "builtins":
+            err_name = f"{module}.{err_name}"
+        return json.dumps({
+            "error": err_name,
+            "message": str(e),
+            "traceback": traceback.format_exc()
+        }, indent=2)
 
 
 class CustomGenerateJsonSchema(GenerateJsonSchema):
