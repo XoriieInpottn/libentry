@@ -129,6 +129,17 @@ def list_api_info(obj) -> List[Tuple[Callable, APIInfo]]:
     return api_list
 
 
+class ServiceError(RuntimeError):
+
+    def __init__(self, error_message=None, error_type=None, traceback=None):
+        self.error_type = error_type
+        self.error_message = error_message
+        self.traceback = traceback
+
+    def __str__(self):
+        return f"{self.error_message}\nCaused by server side error:\n{self.traceback}"
+
+
 class APIClient:
 
     def __init__(
@@ -159,7 +170,11 @@ class APIClient:
         response = requests.get(api_url, headers=self.headers, verify=self.verify, timeout=timeout)
 
         if response.status_code != 200:
-            raise RuntimeError(response.text)
+            err = self._load_json(response.text)
+            if isinstance(err, dict) and "error" in err and "message" in err and "traceback" in err:
+                raise ServiceError(err["message"], err["error"], err["traceback"])
+            else:
+                raise ServiceError(str(err), "UnknownError", "")
 
         try:
             return self._load_json(response.text)
@@ -188,7 +203,11 @@ class APIClient:
             timeout=timeout
         )
         if response.status_code != 200:
-            raise RuntimeError(response.text)
+            err = self._load_json(response.text)
+            if isinstance(err, dict) and "error" in err and "message" in err and "traceback" in err:
+                raise ServiceError(err["message"], err["error"], err["traceback"])
+            else:
+                raise ServiceError(str(err), "UnknownError", "")
 
         if stream:
             if chunk_delimiter is None:
