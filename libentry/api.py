@@ -132,12 +132,20 @@ def list_api_info(obj) -> List[Tuple[Callable, APIInfo]]:
 class ServiceError(RuntimeError):
 
     def __init__(self, error_message=None, error_type=None, traceback=None):
-        self.error_type = error_type
-        self.error_message = error_message
+        self.error_message = error_message + "\n"
+        self.error_type = " " + error_type if error_type is not None else ""
         self.traceback = traceback
 
     def __str__(self):
-        return f"{self.error_message}\nCaused by server side error:\n{self.traceback}"
+        message = (
+            f"{self.error_message}\n"
+            f"This is caused by server side error{self.error_type}. "
+        )
+        traceback = (
+            f"Below is the stacktrace:\n"
+            f"{self.traceback.rstrip()}"
+        ) if self.traceback is not None else ""
+        return message + traceback
 
 
 class APIClient:
@@ -171,10 +179,11 @@ class APIClient:
 
         if response.status_code != 200:
             err = self._load_json(response.text)
-            if isinstance(err, dict) and "error" in err and "message" in err and "traceback" in err:
-                raise ServiceError(err["message"], err["error"], err["traceback"])
-            else:
-                raise ServiceError(str(err), "UnknownError", "")
+            is_standard_error = isinstance(err, dict) and "message" in err
+            message = err["message"] if is_standard_error else str(err)
+            error_type = err.get("error")
+            traceback = err.get("traceback")
+            raise ServiceError(message, error_type, traceback)
 
         try:
             return self._load_json(response.text)
@@ -204,10 +213,11 @@ class APIClient:
         )
         if response.status_code != 200:
             err = self._load_json(response.text)
-            if isinstance(err, dict) and "error" in err and "message" in err and "traceback" in err:
-                raise ServiceError(err["message"], err["error"], err["traceback"])
-            else:
-                raise ServiceError(str(err), "UnknownError", "")
+            is_standard_error = isinstance(err, dict) and "message" in err
+            message = err["message"] if is_standard_error else str(err)
+            error_type = err.get("error")
+            traceback = err.get("traceback")
+            raise ServiceError(message, error_type, traceback)
 
         if stream:
             if chunk_delimiter is None:
