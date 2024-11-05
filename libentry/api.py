@@ -10,9 +10,9 @@ __all__ = [
     "APIClient",
 ]
 
-import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, List, Literal, Mapping, Optional, Tuple
+from urllib.parse import urljoin
 
 import requests
 
@@ -190,7 +190,7 @@ class APIClient:
         self.verify = verify
 
     def get(self, path: str, timeout=60):
-        api_url = os.path.join(self.base_url, path)
+        api_url = urljoin(self.base_url, path)
         response = requests.get(api_url, headers=self.headers, verify=self.verify, timeout=timeout)
 
         if response.status_code != 200:
@@ -213,7 +213,7 @@ class APIClient:
             chunk_prefix: str = None,
             chunk_suffix: str = None,
     ):
-        full_url = os.path.join(self.base_url, path)
+        full_url = urljoin(self.base_url, path)
 
         data = json.dumps(json_data) if json_data is not None else None
         response = requests.post(
