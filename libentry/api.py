@@ -12,10 +12,9 @@ __all__ = [
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, List, Literal, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Iterable, List, Literal, Mapping, Optional, Tuple
 
 import requests
-from pydantic import BaseModel
 
 from libentry import json
 
@@ -129,23 +128,40 @@ def list_api_info(obj) -> List[Tuple[Callable, APIInfo]]:
     return api_list
 
 
+def _load_json_or_str(text: str):
+    try:
+        return json.loads(text)
+    except ValueError:
+        return text
+
+
 class ServiceError(RuntimeError):
 
-    def __init__(self, error_message=None, error_type=None, traceback=None):
-        self.error_message = error_message + "\n"
-        self.error_type = " " + error_type if error_type is not None else ""
-        self.traceback = traceback
+    def __init__(self, text: str):
+        err = _load_json_or_str(text)
+        if isinstance(err, dict):
+            if "message" in err:
+                self.message = err.get("message")
+                self.error = err.get("error")
+                self.traceback = err.get("traceback")
+            else:
+                self.message = str(err)
+                self.error = ""
+                self.traceback = None
+        else:
+            self.message = err
+            self.error = ""
+            self.traceback = None
 
     def __str__(self):
-        message = (
-            f"{self.error_message}\n"
-            f"This is caused by server side error{self.error_type}. "
-        )
-        traceback = (
-            f"Below is the stacktrace:\n"
-            f"{self.traceback.rstrip()}"
-        ) if self.traceback is not None else ""
-        return message + traceback
+        lines = []
+        if self.message:
+            lines += [self.message, "\n\n"]
+        if self.error:
+            lines += ["This is caused by server side error ", self.error, ".\n"]
+        if self.traceback:
+            lines += ["Below is the stacktrace:\n", self.traceback.rstrip()]
+        return "".join(lines)
 
 
 class APIClient:
@@ -178,22 +194,19 @@ class APIClient:
         response = requests.get(api_url, headers=self.headers, verify=self.verify, timeout=timeout)
 
         if response.status_code != 200:
-            err = self._load_json(response.text)
-            is_standard_error = isinstance(err, dict) and "message" in err
-            message = err["message"] if is_standard_error else str(err)
-            error_type = err.get("error")
-            traceback = err.get("traceback")
-            raise ServiceError(message, error_type, traceback)
+            text = response.text
+            response.close()
+            raise ServiceError(text)
 
         try:
-            return self._load_json(response.text)
+            return _load_json_or_str(response.text)
         finally:
             response.close()
 
     def post(
             self,
             path: str,
-            json_data: Mapping = None,
+            json_data: Optional[Mapping] = None,
             stream=False,
             timeout=60,
             chunk_delimiter: str = "\n\n",
@@ -212,12 +225,9 @@ class APIClient:
             timeout=timeout
         )
         if response.status_code != 200:
-            err = self._load_json(response.text)
-            is_standard_error = isinstance(err, dict) and "message" in err
-            message = err["message"] if is_standard_error else str(err)
-            error_type = err.get("error")
-            traceback = err.get("traceback")
-            raise ServiceError(message, error_type, traceback)
+            text = response.text
+            response.close()
+            raise ServiceError(text)
 
         if stream:
             if chunk_delimiter is None:
@@ -232,7 +242,7 @@ class APIClient:
                 )
         else:
             try:
-                return self._load_json(response.text)
+                return _load_json_or_str(response.text)
             finally:
                 response.close()
 
@@ -260,34 +270,6 @@ class APIClient:
                     else:
                         continue
 
-                yield self._load_json(chunk)
+                yield _load_json_or_str(chunk)
         finally:
             response.close()
-
-    @staticmethod
-    def _load_json(text: str):
-        try:
-            return json.loads(text)
-        except ValueError:
-            return text
-
-    def __getattr__(self, item: str):
-        return MethodProxy(self, item)
-
-
-class MethodProxy:
-
-    def __init__(self, client: APIClient, url: str):
-        self.client = client
-        self.url = url
-
-    def __call__(self, request: Optional[Union[Mapping, BaseModel]] = None, **kwargs):
-        if request is None:
-            request = kwargs
-        elif isinstance(request, BaseModel):
-            request = request.model_dump()
-        for k, v in kwargs.items():
-            if isinstance(v, BaseModel):
-                v = v.model_dump()
-            request[k] = v
-        return self.client.post(self.url, request)
