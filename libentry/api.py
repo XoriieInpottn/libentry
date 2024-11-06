@@ -31,6 +31,7 @@ class APIInfo:
     chunk_suffix: str = field(default=None)
     stream_prefix: str = field(default=None)
     stream_suffix: str = field(default=None)
+    error_prefix: str = field(default="ERROR: ")
     extra_info: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -212,6 +213,7 @@ class APIClient:
             chunk_delimiter: str = "\n\n",
             chunk_prefix: str = None,
             chunk_suffix: str = None,
+            error_prefix: str = "ERROR: "
     ):
         full_url = urljoin(self.base_url, path)
 
@@ -239,6 +241,7 @@ class APIClient:
                     chunk_delimiter=chunk_delimiter.encode() if chunk_delimiter else None,
                     chunk_prefix=chunk_prefix.encode() if chunk_prefix else None,
                     chunk_suffix=chunk_suffix.encode() if chunk_suffix else None,
+                    error_prefix=error_prefix.encode() if error_prefix else None,
                 )
         else:
             try:
@@ -251,12 +254,25 @@ class APIClient:
             response: requests.Response,
             chunk_delimiter: bytes,
             chunk_prefix: bytes,
-            chunk_suffix: bytes
+            chunk_suffix: bytes,
+            error_prefix: bytes
     ) -> Iterable:
         try:
+            error = None
             for chunk in response.iter_lines(decode_unicode=False, delimiter=chunk_delimiter):
+                if error is not None:
+                    # error is not None means there is a fatal exception raised from the server side.
+                    # The client should just complete the stream and then raise the error to the upper.
+                    continue
+
                 if not chunk:
                     continue
+
+                if error_prefix is not None:
+                    if chunk.startswith(error_prefix):
+                        chunk = chunk[len(error_prefix):]
+                        error = ServiceError(chunk)
+                        continue
 
                 if chunk_prefix is not None:
                     if chunk.startswith(chunk_prefix):
@@ -271,5 +287,8 @@ class APIClient:
                         continue
 
                 yield _load_json_or_str(chunk)
+
+            if error is not None:
+                raise error
         finally:
             response.close()

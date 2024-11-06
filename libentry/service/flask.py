@@ -33,16 +33,27 @@ class JSONDumper:
         if self.api_info.chunk_delimiter is not None:
             yield self.api_info.chunk_delimiter
 
-        for item in response:
-            text = self.dump(item)
+        try:
+            for item in response:
+                text = self.dump(item)
 
-            if self.api_info.chunk_prefix is not None:
-                yield self.api_info.chunk_prefix
+                if self.api_info.chunk_prefix is not None:
+                    yield self.api_info.chunk_prefix
 
-            yield text
+                yield text
 
-            if self.api_info.chunk_suffix is not None:
-                yield self.api_info.chunk_suffix
+                if self.api_info.chunk_suffix is not None:
+                    yield self.api_info.chunk_suffix
+
+                if self.api_info.chunk_delimiter is not None:
+                    yield self.api_info.chunk_delimiter
+        except Exception as e:
+            if isinstance(e, (SystemExit, KeyboardInterrupt)):
+                raise e
+            if self.api_info.error_prefix is not None:
+                yield self.api_info.error_prefix
+
+            yield self.dump_error(e)
 
             if self.api_info.chunk_delimiter is not None:
                 yield self.api_info.chunk_delimiter
@@ -64,6 +75,19 @@ class JSONDumper:
                 return json.dumps(response)
             except TypeError:
                 return repr(response)
+
+    @staticmethod
+    def dump_error(e: Exception) -> str:
+        err_cls = e.__class__
+        err_name = err_cls.__name__
+        module = err_cls.__module__
+        if module != "builtins":
+            err_name = f"{module}.{err_name}"
+        return json.dumps({
+            "error": err_name,
+            "message": str(e),
+            "traceback": traceback.format_exc()
+        }, indent=2)
 
 
 def create_model_from_signature(fn):
@@ -122,14 +146,14 @@ class FlaskWrapper:
             except Exception as e:
                 if isinstance(e, (SystemExit, KeyboardInterrupt)):
                     raise e
-                return self.app.error(self.make_err(e))
+                return self.app.error(self.dumper.dump_error(e))
         else:
             try:
                 response = self.fn(**input_json)
             except Exception as e:
                 if isinstance(e, (SystemExit, KeyboardInterrupt)):
                     raise e
-                return self.app.error(self.make_err(e))
+                return self.app.error(self.dumper.dump_error(e))
 
         if isinstance(response, (GeneratorType, range)):
             return self.app.response_class(
@@ -141,19 +165,6 @@ class FlaskWrapper:
                 self.dumper.dump(response),
                 mimetype=self.api_info.mime_type
             )
-
-    @staticmethod
-    def make_err(e):
-        err_cls = e.__class__
-        err_name = err_cls.__name__
-        module = err_cls.__module__
-        if module != "builtins":
-            err_name = f"{module}.{err_name}"
-        return json.dumps({
-            "error": err_name,
-            "message": str(e),
-            "traceback": traceback.format_exc()
-        }, indent=2)
 
 
 class CustomGenerateJsonSchema(GenerateJsonSchema):
