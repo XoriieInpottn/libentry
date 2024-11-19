@@ -271,8 +271,10 @@ def run_service(
         host: str = "0.0.0.0",
         port: int = 8888,
         num_workers: int = 1,
-        num_threads: int = 10,
-        num_connections: int = 2000,
+        num_threads: int = 20,
+        num_connections: Optional[int] = 100,
+        backlog: Optional[int] = 100,
+        worker_class: str = "gthread",
         timeout: int = 60,
         keyfile: Optional[str] = None,
         certfile: Optional[str] = None
@@ -283,9 +285,11 @@ def run_service(
         "workers": num_workers,
         "threads": num_threads,
         "timeout": timeout,
-        "worker_connections": num_connections,
+        "worker_connections": num_connections if num_connections else num_threads,
+        "backlog": backlog if backlog else num_threads,
         "keyfile": keyfile,
         "certfile": certfile,
+        "worker_class": worker_class
     }
     for name, value in options.items():
         logger.info(f"Option {name}: {value}")

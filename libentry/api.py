@@ -11,6 +11,7 @@ __all__ = [
 ]
 
 from dataclasses import dataclass, field
+from time import sleep
 from typing import Any, Callable, Iterable, List, Literal, Mapping, Optional, Tuple
 from urllib.parse import urljoin
 
@@ -190,9 +191,48 @@ class APIClient:
             self.headers["Authorization"] = f"Bearer {api_key}"
         self.verify = verify
 
-    def get(self, path: str, timeout=60):
+    def _request(
+            self,
+            method: str,
+            url: str,
+            num_trials: int = 5,
+            retry_interval: int = 5,
+            retry_factor: float = 2,
+            timeout: float = 5,
+            **kwargs
+    ):
+        err = None
+        for _ in range(num_trials):
+            try:
+                return requests.request(method, url, timeout=timeout, **kwargs)
+            except requests.Timeout as e:
+                err = e
+            except requests.ConnectionError as e:
+                err = e
+                sleep(retry_interval)
+            timeout *= retry_factor
+            retry_interval *= retry_factor
+        raise err
+
+    def get(
+            self,
+            path: str,
+            num_trials: int = 5,
+            retry_interval: int = 5,
+            retry_factor: float = 2,
+            timeout: float = 5
+    ):
         api_url = urljoin(self.base_url, path)
-        response = requests.get(api_url, headers=self.headers, verify=self.verify, timeout=timeout)
+        response = self._request(
+            "get",
+            url=api_url,
+            headers=self.headers,
+            verify=self.verify,
+            num_trials=num_trials,
+            retry_interval=retry_interval,
+            retry_factor=retry_factor,
+            timeout=timeout
+        )
 
         if response.status_code != 200:
             text = response.text
@@ -208,8 +248,11 @@ class APIClient:
             self,
             path: str,
             json_data: Optional[Mapping] = None,
-            stream=False,
-            timeout=60,
+            stream: bool = False,
+            num_trials: int = 5,
+            retry_interval: int = 5,
+            retry_factor: float = 2,
+            timeout: float = 5,
             chunk_delimiter: str = "\n\n",
             chunk_prefix: str = None,
             chunk_suffix: str = None,
@@ -218,12 +261,16 @@ class APIClient:
         full_url = urljoin(self.base_url, path)
 
         data = json.dumps(json_data) if json_data is not None else None
-        response = requests.post(
-            full_url,
+        response = self._request(
+            "post",
+            url=full_url,
             headers=self.headers,
             data=data,
             verify=self.verify,
             stream=stream,
+            num_trials=num_trials,
+            retry_interval=retry_interval,
+            retry_factor=retry_factor,
             timeout=timeout
         )
         if response.status_code != 200:
