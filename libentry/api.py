@@ -196,7 +196,6 @@ class APIClient:
             method: str,
             url: str,
             num_trials: int = 5,
-            retry_interval: int = 5,
             retry_factor: float = 2,
             timeout: float = 5,
             **kwargs
@@ -209,16 +208,14 @@ class APIClient:
                 err = e
             except requests.ConnectionError as e:
                 err = e
-                sleep(retry_interval)
+                sleep(timeout)
             timeout *= retry_factor
-            retry_interval *= retry_factor
         raise err
 
     def get(
             self,
             path: str,
             num_trials: int = 5,
-            retry_interval: int = 5,
             retry_factor: float = 2,
             timeout: float = 5
     ):
@@ -229,7 +226,6 @@ class APIClient:
             headers=self.headers,
             verify=self.verify,
             num_trials=num_trials,
-            retry_interval=retry_interval,
             retry_factor=retry_factor,
             timeout=timeout
         )
@@ -250,7 +246,6 @@ class APIClient:
             json_data: Optional[Mapping] = None,
             stream: bool = False,
             num_trials: int = 5,
-            retry_interval: int = 5,
             retry_factor: float = 2,
             timeout: float = 5,
             chunk_delimiter: str = "\n\n",
@@ -269,7 +264,6 @@ class APIClient:
             verify=self.verify,
             stream=stream,
             num_trials=num_trials,
-            retry_interval=retry_interval,
             retry_factor=retry_factor,
             timeout=timeout
         )
