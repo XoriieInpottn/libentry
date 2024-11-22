@@ -26,7 +26,9 @@ class JSONDumper:
     def __init__(self, api_info: APIInfo):
         self.api_info = api_info
 
-    def dump_stream(self, response: Iterable):
+    def dump_stream(self, response: Iterable) -> Iterable[str]:
+        return_value = None
+
         if self.api_info.stream_prefix is not None:
             yield self.api_info.stream_prefix
 
@@ -34,7 +36,14 @@ class JSONDumper:
             yield self.api_info.chunk_delimiter
 
         try:
-            for item in response:
+            it = iter(response)
+            while True:
+                try:
+                    item = next(it)
+                except StopIteration as e:
+                    return_value = e.value
+                    break
+
                 text = self.dump(item)
 
                 if self.api_info.chunk_prefix is not None:
@@ -63,6 +72,9 @@ class JSONDumper:
 
         if self.api_info.chunk_delimiter is not None:
             yield self.api_info.chunk_delimiter
+
+        if return_value is not None:
+            yield self.dump(return_value)
 
     @staticmethod
     def dump(response) -> str:
@@ -132,6 +144,7 @@ class FlaskWrapper:
                     self.input_schema = value.annotation
 
     def __call__(self):
+        # print(request.headers)
         if request.method == "POST":
             input_json = json.loads(request.data) if request.data else {}
         elif request.method == "GET":
@@ -155,13 +168,37 @@ class FlaskWrapper:
                     raise e
                 return self.app.error(self.dumper.dump_error(e))
 
-        if isinstance(response, (GeneratorType, range)):
-            return self.app.response_class(
+        if self.api_info.stream is None:
+            if isinstance(response, (GeneratorType, range)):
+                return self.app.ok(
+                    self.dumper.dump_stream(response),
+                    mimetype=self.api_info.mime_type
+                )
+            else:
+                return self.app.ok(
+                    self.dumper.dump(response),
+                    mimetype=self.api_info.mime_type
+                )
+        elif self.api_info.stream:
+            if not isinstance(response, (GeneratorType, range)):
+                response = [response]
+            return self.app.ok(
                 self.dumper.dump_stream(response),
                 mimetype=self.api_info.mime_type
             )
         else:
-            return self.app.response_class(
+            if isinstance(response, (GeneratorType, range)):
+                output = []
+                it = iter(response)
+                while True:
+                    try:
+                        output.append(next(it))
+                    except StopIteration as e:
+                        if e.value is not None:
+                            output = e.value
+                        break
+                response = output
+            return self.app.ok(
                 self.dumper.dump(response),
                 mimetype=self.api_info.mime_type
             )
@@ -224,7 +261,7 @@ class FlaskServer(Flask):
 
         return self.error(f"No API named \"{name}\"")
 
-    def ok(self, body: str, mimetype="application/json"):
+    def ok(self, body: Union[str, Iterable[str]], mimetype="application/json"):
         return self.response_class(body, status=200, mimetype=mimetype)
 
     def error(self, body: str, mimetype="text"):

@@ -6,6 +6,7 @@ __all__ = [
     "api",
     "get",
     "post",
+    "stream_post",
     "list_api_info",
     "APIClient",
 ]
@@ -27,6 +28,7 @@ class APIInfo:
     method: str = field()
     path: str = field()
     mime_type: str = field(default="application/json")
+    stream: Optional[bool] = field(default=None)
     chunk_delimiter: str = field(default="\n\n")
     chunk_prefix: str = field(default=None)
     chunk_suffix: str = field(default=None)
@@ -40,6 +42,7 @@ def api(
         method: Literal["GET", "POST"] = "POST",
         path: Optional[str] = None,
         mime_type: str = "application/json",
+        stream: Optional[bool] = None,
         chunk_delimiter: str = "\n\n",
         chunk_prefix: str = None,
         chunk_suffix: str = None,
@@ -59,6 +62,7 @@ def api(
             method=method,
             path=_path,
             mime_type=mime_type,
+            stream=stream,
             chunk_delimiter=chunk_delimiter,
             chunk_prefix=chunk_prefix,
             chunk_suffix=chunk_suffix,
@@ -96,6 +100,7 @@ def get(
 
 def post(
         path: Optional[str] = None,
+        stream: Optional[bool] = None,
         mime_type: str = "application/json",
         chunk_delimiter: str = "\n\n",
         chunk_prefix: str = None,
@@ -108,6 +113,31 @@ def post(
         method="POST",
         path=path,
         mime_type=mime_type,
+        stream=stream,
+        chunk_delimiter=chunk_delimiter,
+        chunk_prefix=chunk_prefix,
+        chunk_suffix=chunk_suffix,
+        stream_prefix=stream_prefix,
+        stream_suffix=stream_suffix,
+        **kwargs
+    )
+
+
+def stream_post(
+        path: Optional[str] = None,
+        mime_type: str = "application/json",
+        chunk_delimiter: str = "\n\n",
+        chunk_prefix: str = None,
+        chunk_suffix: str = None,
+        stream_prefix: str = None,
+        stream_suffix: str = None,
+        **kwargs
+) -> Callable:
+    return api(
+        method="POST",
+        path=path,
+        mime_type=mime_type,
+        stream=True,
         chunk_delimiter=chunk_delimiter,
         chunk_prefix=chunk_prefix,
         chunk_suffix=chunk_suffix,
@@ -333,3 +363,28 @@ class APIClient:
                 raise error
         finally:
             response.close()
+
+    def stream_post(
+            self,
+            path: str,
+            json_data: Optional[Mapping] = None,
+            num_trials: int = 5,
+            retry_factor: float = 2,
+            timeout: float = 5,
+            chunk_delimiter: str = "\n\n",
+            chunk_prefix: str = None,
+            chunk_suffix: str = None,
+            error_prefix: str = "ERROR: "
+    ):
+        return self.post(
+            path=path,
+            json_data=json_data,
+            stream=True,
+            num_trials=num_trials,
+            retry_factor=retry_factor,
+            timeout=timeout,
+            chunk_delimiter=chunk_delimiter,
+            chunk_prefix=chunk_prefix,
+            chunk_suffix=chunk_suffix,
+            error_prefix=error_prefix,
+        )
