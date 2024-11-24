@@ -144,9 +144,6 @@ class FlaskWrapper:
                     self.input_schema = value.annotation
 
     def __call__(self):
-        print("*" * 10)
-        print(request.headers)
-        print("*" * 10)
         if request.method == "POST":
             input_json = json.loads(request.data) if request.data else {}
         elif request.method == "GET":
