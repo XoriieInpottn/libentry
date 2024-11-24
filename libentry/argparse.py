@@ -106,11 +106,16 @@ class ArgumentParser(argparse.ArgumentParser):
     def add_schema(self, name: str, schema: Type[BaseModel], default: Union[str, BaseModel] = None):
         if default is not None:
             if isinstance(default, str):
-                default_json = yaml.load(default, yaml.FullLoader)
+                default_json = yaml.safe_load(default)
+                if isinstance(default_json, str):
+                    with open(default_json, "r") as f:
+                        default_json = yaml.safe_load(f)
+                if not isinstance(default_json, dict):
+                    raise ValueError(f"Invalid default value for \"{name}\".")
             elif isinstance(default, BaseModel):
                 default_json = default.model_dump()
             else:
-                raise TypeError(f"Invalid default type {type(default)}.")
+                raise TypeError(f"Invalid default type {type(default)} for \"{name}\".")
             default_flat_dict = {}
             self._json_flatten(name, default_json, default_flat_dict)
             default = default_flat_dict
