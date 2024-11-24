@@ -13,7 +13,7 @@ if __name__ == '__main__':
             'libentry',
             "libentry.service"
         ],
-        version='1.11.7',
+        version='1.11.8',
         description='Entries for experimental utilities.',
         long_description_content_type='text/markdown',
         long_description=long_description,

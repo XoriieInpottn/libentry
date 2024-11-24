@@ -243,8 +243,9 @@ class APIClient:
     def post(
             self,
             path: str,
-            json_data: Optional[Mapping] = None,
+            json_data: Optional[Mapping] = None, *,
             stream: bool = False,
+            exhaust_stream: bool = False,
             num_trials: int = 5,
             retry_factor: float = 2,
             timeout: float = 5,
@@ -281,13 +282,14 @@ class APIClient:
                 # TODO: this branch is not tested yet!
                 return response.iter_content(decode_unicode=True)
             else:
-                return self._iter_chunks(
+                gen = self._iter_chunks(
                     response=response,
                     chunk_delimiter=chunk_delimiter.encode() if chunk_delimiter else None,
                     chunk_prefix=chunk_prefix.encode() if chunk_prefix else None,
                     chunk_suffix=chunk_suffix.encode() if chunk_suffix else None,
                     error_prefix=error_prefix.encode() if error_prefix else None,
                 )
+                return gen if not exhaust_stream else [*gen]
         else:
             try:
                 return _load_json_or_str(response.text)
