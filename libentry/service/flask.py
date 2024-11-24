@@ -144,7 +144,9 @@ class FlaskWrapper:
                     self.input_schema = value.annotation
 
     def __call__(self):
-        # print(request.headers)
+        print("*" * 10)
+        print(request.headers)
+        print("*" * 10)
         if request.method == "POST":
             input_json = json.loads(request.data) if request.data else {}
         elif request.method == "GET":
@@ -168,18 +170,8 @@ class FlaskWrapper:
                     raise e
                 return self.app.error(self.dumper.dump_error(e))
 
-        if self.api_info.stream is None:
-            if isinstance(response, (GeneratorType, range)):
-                return self.app.ok(
-                    self.dumper.dump_stream(response),
-                    mimetype=self.api_info.mime_type
-                )
-            else:
-                return self.app.ok(
-                    self.dumper.dump(response),
-                    mimetype=self.api_info.mime_type
-                )
-        elif self.api_info.stream:
+        stream = request.headers.get("Accept", "").endswith("-stream")
+        if stream:
             if not isinstance(response, (GeneratorType, range)):
                 response = [response]
             return self.app.ok(
@@ -195,7 +187,7 @@ class FlaskWrapper:
                         output.append(next(it))
                     except StopIteration as e:
                         if e.value is not None:
-                            output = e.value
+                            output.append(e.value)
                         break
                 response = output
             return self.app.ok(
