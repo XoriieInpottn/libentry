@@ -217,7 +217,7 @@ class APIClient:
             path: str,
             num_trials: int = 5,
             retry_factor: float = 2,
-            timeout: float = 5
+            timeout: float = 15
     ):
         api_url = urljoin(self.base_url, path)
         response = self._request(
@@ -248,7 +248,7 @@ class APIClient:
             exhaust_stream: bool = False,
             num_trials: int = 5,
             retry_factor: float = 2,
-            timeout: float = 5,
+            timeout: float = 15,
             chunk_delimiter: str = "\n\n",
             chunk_prefix: str = None,
             chunk_suffix: str = None,
@@ -256,10 +256,8 @@ class APIClient:
     ):
         full_url = urljoin(self.base_url, path)
 
-        headers = self.headers
-        if stream:
-            headers = {**headers}
-            headers["Accept"] = headers["Accept"] + "-stream"
+        headers = {**self.headers}
+        headers["Accept"] = headers["Accept"] + f"; stream={int(stream)}"
         data = json.dumps(json_data) if json_data is not None else None
         response = self._request(
             "post",

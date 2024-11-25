@@ -6,6 +6,7 @@ __all__ = [
 ]
 
 import asyncio
+import re
 import traceback
 from inspect import signature
 from types import GeneratorType
@@ -32,8 +33,8 @@ class JSONDumper:
         if self.api_info.stream_prefix is not None:
             yield self.api_info.stream_prefix
 
-        if self.api_info.chunk_delimiter is not None:
-            yield self.api_info.chunk_delimiter
+            if self.api_info.chunk_delimiter is not None:
+                yield self.api_info.chunk_delimiter
 
         try:
             it = iter(response)
@@ -59,6 +60,7 @@ class JSONDumper:
         except Exception as e:
             if isinstance(e, (SystemExit, KeyboardInterrupt)):
                 raise e
+
             if self.api_info.error_prefix is not None:
                 yield self.api_info.error_prefix
 
@@ -70,11 +72,14 @@ class JSONDumper:
         if self.api_info.stream_suffix is not None:
             yield self.api_info.stream_suffix
 
-        if self.api_info.chunk_delimiter is not None:
-            yield self.api_info.chunk_delimiter
+            if self.api_info.chunk_delimiter is not None:
+                yield self.api_info.chunk_delimiter
 
         if return_value is not None:
             yield self.dump(return_value)
+
+            if self.api_info.chunk_delimiter is not None:
+                yield self.api_info.chunk_delimiter
 
     @staticmethod
     def dump(response) -> str:
@@ -167,30 +172,50 @@ class FlaskWrapper:
                     raise e
                 return self.app.error(self.dumper.dump_error(e))
 
-        stream = request.headers.get("Accept", "").endswith("-stream")
-        if stream:
-            if not isinstance(response, (GeneratorType, range)):
-                response = [response]
-            return self.app.ok(
-                self.dumper.dump_stream(response),
-                mimetype=self.api_info.mime_type
-            )
+        stream = None
+        accept = request.headers.get("Accept", "")
+        for param in accept.split(";"):
+            match = re.search(r"^\s*stream=(.+)$", param)
+            if match:
+                stream = match.group(1)
+                stream = stream in {"1", "true", "True"}
+                break
+
+        if stream is not None:
+            if stream:
+                if not isinstance(response, (GeneratorType, range)):
+                    response = [response]
+                return self.app.ok(
+                    self.dumper.dump_stream(response),
+                    mimetype=self.api_info.mime_type
+                )
+            else:
+                if isinstance(response, (GeneratorType, range)):
+                    output = []
+                    it = iter(response)
+                    while True:
+                        try:
+                            output.append(next(it))
+                        except StopIteration as e:
+                            if e.value is not None:
+                                output.append(e.value)
+                            break
+                    response = output
+                return self.app.ok(
+                    self.dumper.dump(response),
+                    mimetype=self.api_info.mime_type
+                )
         else:
             if isinstance(response, (GeneratorType, range)):
-                output = []
-                it = iter(response)
-                while True:
-                    try:
-                        output.append(next(it))
-                    except StopIteration as e:
-                        if e.value is not None:
-                            output.append(e.value)
-                        break
-                response = output
-            return self.app.ok(
-                self.dumper.dump(response),
-                mimetype=self.api_info.mime_type
-            )
+                return self.app.ok(
+                    self.dumper.dump_stream(response),
+                    mimetype=self.api_info.mime_type
+                )
+            else:
+                return self.app.ok(
+                    self.dumper.dump(response),
+                    mimetype=self.api_info.mime_type
+                )
 
 
 class CustomGenerateJsonSchema(GenerateJsonSchema):
