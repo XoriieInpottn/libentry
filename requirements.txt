@@ -3,6 +3,4 @@ json5
 pydantic
 Flask
 gunicorn
-uvicorn
-fastapi
 PyYAML
