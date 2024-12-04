@@ -10,14 +10,14 @@ import re
 import traceback
 from inspect import signature
 from types import GeneratorType
-from typing import Callable, Iterable, Optional, Type, Union
+from typing import Any, Callable, Iterable, Optional, Type, Union
 
 from flask import Flask, request
 from gunicorn.app.base import BaseApplication
 from pydantic import BaseModel, Field, create_model
 from pydantic.json_schema import GenerateJsonSchema
 
-from libentry import json
+from libentry import api, json
 from libentry.api import APIInfo, list_api_info
 from libentry.logging import logger
 
@@ -120,7 +120,11 @@ def create_model_from_signature(fn):
             fields[name] = (param.annotation, None)
         else:
             fields[name] = (param.annotation, Field())
-    fields["return"] = (sig.return_annotation, None)
+
+    return_annotation = sig.return_annotation
+    if return_annotation is sig.empty:
+        return_annotation = Any
+    fields["return"] = (return_annotation, None)
     return create_model(f"__{fn.__name__}_signature", **fields)
 
 
@@ -253,27 +257,45 @@ class FlaskServer(Flask):
                 self.post(path)(wrapped_fn)
             else:
                 raise RuntimeError(f"Unsupported method \"{method}\" for ")
+
+        for fn, api_info in list_api_info(self):
+            method = api_info.method
+            path = api_info.path
+            if asyncio.iscoroutinefunction(fn):
+                logger.error(f"Async function \"{fn.__name__}\" is not supported.")
+                continue
+            logger.info(f"Serving {method}-API for {path}")
+
+            wrapped_fn = FlaskWrapper(self, fn, api_info)
+            if method == "GET":
+                self.get(path)(wrapped_fn)
+            elif method == "POST":
+                self.post(path)(wrapped_fn)
+            else:
+                raise RuntimeError(f"Unsupported method \"{method}\" for ")
+
         logger.info("Flask application initialized.")
 
-        self.get("/")(self.index)
-
-    def index(self):
-        args = request.args
-        if "name" not in args:
+    @api.get("/")
+    def index(self, name: str = None):
+        if name is None:
             all_api = []
             for _, api_info in self.api_info_list:
                 all_api.append({"path": api_info.path})
-            return self.ok(json.dumps(all_api, indent=4))
+            return all_api
 
-        name = args["name"]
         for fn, api_info in self.api_info_list:
             if api_info.path == "/" + name:
                 # noinspection PyTypeChecker
                 dynamic_model = create_model_from_signature(fn)
                 schema = dynamic_model.model_json_schema(schema_generator=CustomGenerateJsonSchema)
-                return self.ok(json.dumps(schema, indent=4))
+                return schema
 
-        return self.error(f"No API named \"{name}\"")
+        return f"No API named \"{name}\""
+
+    @api.get()
+    def live(self):
+        return "OK"
 
     def ok(self, body: Union[str, Iterable[str]], mimetype="application/json"):
         return self.response_class(body, status=200, mimetype=mimetype)
