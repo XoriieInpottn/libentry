@@ -170,8 +170,8 @@ class APIClient:
 
     def __init__(
             self,
-            base_url: str,
-            api_key: str = None,
+            base_url: Optional[str] = None,
+            api_key: Optional[str] = None,
             accept: str = "application/json",
             content_type: str = "application/json",
             user_agent: str = "API Client",
@@ -219,10 +219,10 @@ class APIClient:
             retry_factor: float = 2,
             timeout: float = 15
     ):
-        api_url = urljoin(self.base_url, path)
+        full_url = urljoin(self.base_url, path) if self.base_url else path
         response = self._request(
             "get",
-            url=api_url,
+            url=full_url,
             headers=self.headers,
             verify=self.verify,
             num_trials=num_trials,
@@ -254,7 +254,7 @@ class APIClient:
             chunk_suffix: str = None,
             error_prefix: str = "ERROR: "
     ):
-        full_url = urljoin(self.base_url, path)
+        full_url = urljoin(self.base_url, path) if self.base_url else path
 
         headers = {**self.headers}
         headers["Accept"] = headers["Accept"] + f"; stream={int(stream)}"
