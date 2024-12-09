@@ -10,7 +10,7 @@ import re
 import traceback
 from inspect import signature
 from types import GeneratorType
-from typing import Any, Callable, Iterable, Optional, Type, Union
+from typing import Any, Callable, Iterable, Mapping, Optional, Type, Union
 
 from flask import Flask, request
 from gunicorn.app.base import BaseApplication
@@ -20,6 +20,7 @@ from pydantic.json_schema import GenerateJsonSchema
 from libentry import api, json
 from libentry.api import APIInfo, list_api_info
 from libentry.logging import logger
+from libentry.schema import parse_type, signature_to_model
 
 
 class JSONDumper:
@@ -287,9 +288,20 @@ class FlaskServer(Flask):
         for fn, api_info in self.api_info_list:
             if api_info.path == "/" + name:
                 # noinspection PyTypeChecker
-                dynamic_model = create_model_from_signature(fn)
-                schema = dynamic_model.model_json_schema(schema_generator=CustomGenerateJsonSchema)
-                return schema
+                # dynamic_model = create_model_from_signature(fn)
+                # schema = dynamic_model.model_json_schema(schema_generator=CustomGenerateJsonSchema)
+
+                model = signature_to_model(fn)
+                context = {}
+                name = parse_type(model, context)
+
+                fields = context[name].model_dump()["fields"]
+                del context[name]
+                dependencies = []
+                for schema in context.values():
+                    dependencies.append(schema.model_dump())
+
+                return {"fields": fields, "dependencies": dependencies}
 
         return f"No API named \"{name}\""
 
