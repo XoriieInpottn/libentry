@@ -10,17 +10,16 @@ import re
 import traceback
 from inspect import signature
 from types import GeneratorType
-from typing import Any, Callable, Iterable, Mapping, Optional, Type, Union
+from typing import Any, Callable, Iterable, Optional, Type, Union
 
 from flask import Flask, request
 from gunicorn.app.base import BaseApplication
 from pydantic import BaseModel, Field, create_model
-from pydantic.json_schema import GenerateJsonSchema
 
 from libentry import api, json
 from libentry.api import APIInfo, list_api_info
 from libentry.logging import logger
-from libentry.schema import parse_type, signature_to_model
+from libentry.schema import query_api
 
 
 class JSONDumper:
@@ -223,14 +222,6 @@ class FlaskWrapper:
                 )
 
 
-class CustomGenerateJsonSchema(GenerateJsonSchema):
-
-    def handle_invalid_for_json_schema(self, schema, error_info: str):
-        cls = schema.get("cls")
-        cls_name = f"{cls.__module__}.{cls.__name__}" if cls is not None else "UNKNOWN"
-        return {"type": cls_name}
-
-
 class FlaskServer(Flask):
 
     def __init__(self, service):
@@ -287,21 +278,7 @@ class FlaskServer(Flask):
 
         for fn, api_info in self.api_info_list:
             if api_info.path == "/" + name:
-                # noinspection PyTypeChecker
-                # dynamic_model = create_model_from_signature(fn)
-                # schema = dynamic_model.model_json_schema(schema_generator=CustomGenerateJsonSchema)
-
-                model = signature_to_model(fn)
-                context = {}
-                name = parse_type(model, context)
-
-                fields = context[name].model_dump()["fields"]
-                del context[name]
-                dependencies = []
-                for schema in context.values():
-                    dependencies.append(schema.model_dump())
-
-                return {"fields": fields, "dependencies": dependencies}
+                return query_api(fn).model_dump()
 
         return f"No API named \"{name}\""
 
