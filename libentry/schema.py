@@ -11,9 +11,10 @@ __all__ = [
 ]
 
 import enum
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from inspect import signature
-from typing import Any, Iterable, List, Literal, Mapping, MutableMapping, NoReturn, Optional, Sequence, Union, get_args, \
+from typing import Any, Dict, Iterable, List, Literal, Mapping, MutableMapping, NoReturn, Optional, Sequence, Union, \
+    get_args, \
     get_origin
 
 from pydantic import BaseModel, Field, create_model
@@ -27,6 +28,7 @@ class SchemaField(BaseModel):
     is_required: bool = Field(True)
     title: str = Field()
     description: Optional[str] = Field(None)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class Schema(BaseModel):
@@ -127,18 +129,21 @@ def _parse_base_model(context: ParseContext):
             fields = origin.model_fields
             assert isinstance(fields, Mapping)
             for name, field in fields.items():
-
                 try:
-                    schema.fields.append(SchemaField(
+                    schema_field = SchemaField(
                         name=name,
                         type=parse_type(field.annotation, context.schemas),
                         default=field.default if field.default is not PydanticUndefined else None,
                         is_required=field.is_required(),
                         title="".join(word.capitalize() for word in name.split("_")),
                         description=field.description
-                    ))
+                    )
                 except TypeError as e:
                     raise TypeError(f"{name}: {str(e)}")
+                for md in field.metadata:
+                    if is_dataclass(md):
+                        schema_field.metadata.update(asdict(md))
+                schema.fields.append(schema_field)
             context.schemas[model_name] = schema
 
         return model_name
@@ -177,13 +182,13 @@ def generic_parser(fn):
 
 @generic_parser
 def _parse_any(context: ParseContext):
-    if context.origin is Any:
+    if context.origin is Any or str(context.origin) == str(Any):
         return "Any"
 
 
 @generic_parser
 def _parse_union(context: ParseContext):
-    if context.origin is Union:
+    if context.origin is Union or str(context.origin) == str(Union):
         return [
             parse_type(arg, context.schemas)
             for arg in get_args(context.annotation)
@@ -192,7 +197,7 @@ def _parse_union(context: ParseContext):
 
 @generic_parser
 def _parse_literal(context: ParseContext):
-    if context.origin is Literal:
+    if context.origin is Literal or str(context.origin) == str(Literal):
         enum_args = get_args(context.annotation)
         return f"Enum[{','.join(map(str, enum_args))}]"
 

@@ -149,8 +149,9 @@ class FlaskWrapper:
         params = signature(fn).parameters
         if len(params) == 1:
             for name, value in params.items():
-                if issubclass(value.annotation, BaseModel):
-                    self.input_schema = value.annotation
+                annotation = value.annotation
+                if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+                    self.input_schema = annotation
 
     def __call__(self):
         if request.method == "POST":
@@ -161,6 +162,11 @@ class FlaskWrapper:
             return self.app.error(f"Unsupported method \"{request.method}\".")
 
         if self.input_schema is not None:
+            # Note that "input_schema is not None" means:
+            # (1) The function has only one argument;
+            # (2) The arguments is a BaseModel.
+            # In this case, the request data can be directly validated as a "BaseModel" and
+            # subsequently passed to the function as a single object.
             try:
                 input_data = self.input_schema.model_validate(input_json)
                 response = self.fn(input_data)
@@ -169,6 +175,8 @@ class FlaskWrapper:
                     raise e
                 return self.app.error(self.dumper.dump_error(e))
         else:
+            # The function has multiple arguments, and the request data bundle them as a single object.
+            # So, they should be unpacked before pass to the function.
             try:
                 response = self.fn(**input_json)
             except Exception as e:
