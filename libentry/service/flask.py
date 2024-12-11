@@ -334,21 +334,25 @@ def run_service(
         port: int = 8888,
         num_workers: int = 1,
         num_threads: int = 20,
-        num_connections: Optional[int] = 100,
-        backlog: Optional[int] = 100,
+        num_connections: Optional[int] = 1000,
+        backlog: Optional[int] = 1000,
         worker_class: str = "gthread",
         timeout: int = 60,
         keyfile: Optional[str] = None,
         certfile: Optional[str] = None
 ):
     logger.info("Starting gunicorn server.")
+    if num_connections is None or num_connections < num_threads * 2:
+        num_connections = num_threads * 2
+    if backlog is None or backlog < num_threads * 2:
+        backlog = num_threads * 2
     options = {
         "bind": f"{host}:{port}",
         "workers": num_workers,
         "threads": num_threads,
         "timeout": timeout,
-        "worker_connections": num_connections if num_connections else num_threads,
-        "backlog": backlog if backlog else num_threads,
+        "worker_connections": num_connections,
+        "backlog": backlog,
         "keyfile": keyfile,
         "certfile": certfile,
         "worker_class": worker_class
