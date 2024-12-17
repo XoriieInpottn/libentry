@@ -87,7 +87,7 @@ def _parse_dict(context: ParseContext):
             key_type = "str"
             value_type = parse_type(dict_args[1], context.schemas)
             if isinstance(value_type, list):
-                raise TypeError("\"Union\" cannot be used as the type of list elements.")
+                raise TypeError("\"Union\" cannot be used as the type of dict elements.")
             return f"Dict[{key_type},{value_type}]"
         else:
             return "Dict"
@@ -130,12 +130,16 @@ def _parse_base_model(context: ParseContext):
             assert isinstance(fields, Mapping)
             for name, field in fields.items():
                 try:
+                    default = field.default if field.default is not PydanticUndefined else None
+                    title = field.title
+                    if title is None:
+                        title = "".join(word.capitalize() for word in name.split("_"))
                     schema_field = SchemaField(
                         name=name,
                         type=parse_type(field.annotation, context.schemas),
-                        default=field.default if field.default is not PydanticUndefined else None,
+                        default=default,
                         is_required=field.is_required(),
-                        title="".join(word.capitalize() for word in name.split("_")),
+                        title=title,
                         description=field.description
                     )
                 except TypeError as e:
