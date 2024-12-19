@@ -214,12 +214,12 @@ class APIClient:
 
     def get(
             self,
-            path: str,
+            path: Optional[str] = None, *,
             num_trials: int = 5,
             retry_factor: float = 2,
             timeout: float = 15
     ):
-        full_url = urljoin(self.base_url, path) if self.base_url else path
+        full_url = urljoin(self.base_url, path)
         response = self._request(
             "get",
             url=full_url,
@@ -242,7 +242,7 @@ class APIClient:
 
     def post(
             self,
-            path: str,
+            path: Optional[str] = None,
             json_data: Optional[Mapping] = None, *,
             stream: bool = False,
             exhaust_stream: bool = False,
@@ -254,7 +254,7 @@ class APIClient:
             chunk_suffix: str = None,
             error_prefix: str = "ERROR: "
     ):
-        full_url = urljoin(self.base_url, path) if self.base_url else path
+        full_url = urljoin(self.base_url, path)
 
         headers = {**self.headers}
         headers["Accept"] = headers["Accept"] + f"; stream={int(stream)}"

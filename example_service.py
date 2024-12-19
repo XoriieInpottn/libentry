@@ -102,8 +102,8 @@ class ExampleService:
 
     @api.post()
     def foo2(self, request_ids: List[str]) -> str:
-        sleep(1)
-        return "finished"
+        l = len(request_ids[0])
+        return "finished" + str(l)
 
     @api.post()
     def foo3(self, request: PreferenceQuestionToolInputParam):
@@ -117,7 +117,7 @@ def main():
         service_config=None,
         host="0.0.0.0",
         port=3333,
-        num_workers=1,
+        num_workers=10,
         num_threads=50,
     )
     return 0
