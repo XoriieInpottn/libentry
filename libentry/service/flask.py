@@ -261,6 +261,11 @@ class FlaskServer(Flask):
         for fn, api_info in list_api_info(self):
             method = api_info.method
             path = api_info.path
+
+            if any(api_info.path == a.path for _, a in self.api_info_list):
+                logger.info(f"Use custom implementation of {path}.")
+                continue
+
             if asyncio.iscoroutinefunction(fn):
                 logger.error(f"Async function \"{fn.__name__}\" is not supported.")
                 continue
