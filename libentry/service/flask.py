@@ -13,13 +13,32 @@ from types import GeneratorType
 from typing import Any, Callable, Iterable, Optional, Type, Union
 
 from flask import Flask, request
-from gunicorn.app.base import BaseApplication
 from pydantic import BaseModel, Field, create_model
 
 from libentry import api, json
 from libentry.api import APIInfo, list_api_info
 from libentry.logging import logger
 from libentry.schema import query_api
+
+try:
+    from gunicorn.app.base import BaseApplication
+except ImportError:
+    class BaseApplication:
+
+        def load(self) -> Flask:
+            pass
+
+        def run(self):
+            flask_server = self.load()
+            assert hasattr(self, "options")
+            bind = getattr(self, "options")["bind"]
+            pos = bind.rfind(":")
+            host = bind[:pos]
+            port = int(bind[pos + 1:])
+            logger.warn("Your system doesn't support gunicorn.")
+            logger.warn("Use Flask directly.")
+            logger.warn("Options like \"num_threads\", \"num_workers\" are ignored.")
+            return flask_server.run(host=host, port=port)
 
 
 class JSONDumper:
@@ -373,3 +392,4 @@ def run_service(
     for name, value in options.items():
         logger.info(f"Option {name}: {value}")
     GunicornApplication(service_type, service_config, options).run()
+
