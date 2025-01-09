@@ -1,5 +1,6 @@
 requests
 json5
+numpy
 pydantic
 Flask
 gunicorn
