@@ -166,6 +166,9 @@ class ServiceError(RuntimeError):
         return "".join(lines)
 
 
+ErrorCallback = Callable[[Exception], None]
+
+
 class APIClient:
 
     def __init__(
@@ -195,29 +198,41 @@ class APIClient:
             self,
             method: str,
             url: str,
-            num_trials: int = 5,
-            retry_factor: float = 2,
-            timeout: float = 5,
+            num_trials: int,
+            timeout: float,
+            interval: float,
+            retry_factor: float,
+            on_error: Optional[ErrorCallback] = None,
             **kwargs
     ):
         err = None
-        for _ in range(num_trials):
+        for i in range(num_trials):
             try:
-                return requests.request(method, url, timeout=timeout, **kwargs)
+                return requests.request(
+                    method=method,
+                    url=url,
+                    timeout=timeout * (1 + i * retry_factor),
+                    **kwargs
+                )
             except requests.Timeout as e:
                 err = e
+                if callable(on_error):
+                    on_error(e)
             except requests.ConnectionError as e:
                 err = e
-                sleep(timeout)
-            timeout *= retry_factor
+                if callable(on_error):
+                    on_error(e)
+            sleep(interval)
         raise err
 
     def get(
             self,
             path: Optional[str] = None, *,
             num_trials: int = 5,
-            retry_factor: float = 2,
-            timeout: float = 15
+            timeout: float = 15,
+            interval: float = 1,
+            retry_factor: float = 0.5,
+            on_error: Optional[ErrorCallback] = None
     ):
         full_url = urljoin(self.base_url, path)
         response = self._request(
@@ -226,8 +241,10 @@ class APIClient:
             headers=self.headers,
             verify=self.verify,
             num_trials=num_trials,
+            timeout=timeout,
+            interval=interval,
             retry_factor=retry_factor,
-            timeout=timeout
+            on_error=on_error
         )
 
         if response.status_code != 200:
@@ -247,8 +264,10 @@ class APIClient:
             stream: bool = False,
             exhaust_stream: bool = False,
             num_trials: int = 5,
-            retry_factor: float = 2,
             timeout: float = 15,
+            interval: float = 1,
+            retry_factor: float = 0.5,
+            on_error: Optional[ErrorCallback] = None,
             chunk_delimiter: str = "\n\n",
             chunk_prefix: str = None,
             chunk_suffix: str = None,
@@ -267,8 +286,10 @@ class APIClient:
             verify=self.verify,
             stream=stream,
             num_trials=num_trials,
+            timeout=timeout,
+            interval=interval,
             retry_factor=retry_factor,
-            timeout=timeout
+            on_error=on_error
         )
         if response.status_code != 200:
             text = response.text
