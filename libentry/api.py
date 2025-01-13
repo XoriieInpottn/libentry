@@ -15,7 +15,8 @@ from time import sleep
 from typing import Any, Callable, Iterable, List, Literal, Mapping, Optional, Tuple
 from urllib.parse import urljoin
 
-import requests
+from urllib3 import PoolManager
+from urllib3.exceptions import HTTPError, TimeoutError
 
 from libentry import json
 
@@ -193,32 +194,49 @@ class APIClient:
         if api_key is not None:
             self.headers["Authorization"] = f"Bearer {api_key}"
         self.verify = verify
+        self.charset = "UTF-8"
+
+    DEFAULT_CONN_POOL_SIZE = 10
+    CONN_POOL = (
+        PoolManager(DEFAULT_CONN_POOL_SIZE),
+        PoolManager(DEFAULT_CONN_POOL_SIZE, cert_reqs='CERT_NONE')
+    )
 
     def _request(
             self,
-            method: str,
+            method: Literal["GET", "POST"],
             url: str,
-            num_trials: int,
-            timeout: float,
-            interval: float,
-            retry_factor: float,
+            body: Optional[str] = None,
+            headers: Optional[Mapping[str, str]] = None,
+            stream: bool = False,
+            num_trials: int = 5,
+            timeout: float = 15,
+            interval: float = 1,
+            retry_factor: float = 0.5,
             on_error: Optional[ErrorCallback] = None,
-            **kwargs
+            verify: Optional[bool] = None,
     ):
+        headers = self.headers if headers is None else headers
+        verify = self.verify if verify is None else verify
+        preload_content = not stream
+
+        pool = self.CONN_POOL[int(not verify)]
         err = None
         for i in range(num_trials):
             try:
-                return requests.request(
+                return pool.request(
                     method=method,
                     url=url,
+                    body=body,
+                    headers=headers,
                     timeout=timeout * (1 + i * retry_factor),
-                    **kwargs
+                    preload_content=preload_content
                 )
-            except requests.Timeout as e:
+            except TimeoutError as e:
                 err = e
                 if callable(on_error):
                     on_error(e)
-            except requests.ConnectionError as e:
+            except HTTPError as e:
                 err = e
                 if callable(on_error):
                     on_error(e)
@@ -236,10 +254,8 @@ class APIClient:
     ):
         full_url = urljoin(self.base_url, path)
         response = self._request(
-            "get",
+            method="GET",
             url=full_url,
-            headers=self.headers,
-            verify=self.verify,
             num_trials=num_trials,
             timeout=timeout,
             interval=interval,
@@ -247,15 +263,15 @@ class APIClient:
             on_error=on_error
         )
 
-        if response.status_code != 200:
-            text = response.text
-            response.close()
+        if response.status != 200:
+            text = response.data.decode(self.charset)
+            response.release_conn()
             raise ServiceError(text)
 
         try:
-            return _load_json_or_str(response.text)
+            return _load_json_or_str(response.data.decode(self.charset))
         finally:
-            response.close()
+            response.release_conn()
 
     def post(
             self,
@@ -271,19 +287,19 @@ class APIClient:
             chunk_delimiter: str = "\n\n",
             chunk_prefix: str = None,
             chunk_suffix: str = None,
-            error_prefix: str = "ERROR: "
+            error_prefix: str = "ERROR: ",
+            stream_read_size: int = 512
     ):
         full_url = urljoin(self.base_url, path)
 
         headers = {**self.headers}
         headers["Accept"] = headers["Accept"] + f"; stream={int(stream)}"
-        data = json.dumps(json_data) if json_data is not None else None
+        body = json.dumps(json_data) if json_data is not None else None
         response = self._request(
-            "post",
+            "POST",
             url=full_url,
+            body=body,
             headers=headers,
-            data=data,
-            verify=self.verify,
             stream=stream,
             num_trials=num_trials,
             timeout=timeout,
@@ -291,70 +307,81 @@ class APIClient:
             retry_factor=retry_factor,
             on_error=on_error
         )
-        if response.status_code != 200:
-            text = response.text
-            response.close()
+        if response.status != 200:
+            text = response.data.decode(self.charset)
+            response.release_conn()
             raise ServiceError(text)
 
-        if stream:
-            if chunk_delimiter is None:
-                # TODO: this branch is not tested yet!
-                return response.iter_content(decode_unicode=True)
-            else:
-                gen = self._iter_chunks(
-                    response=response,
-                    chunk_delimiter=chunk_delimiter.encode() if chunk_delimiter else None,
-                    chunk_prefix=chunk_prefix.encode() if chunk_prefix else None,
-                    chunk_suffix=chunk_suffix.encode() if chunk_suffix else None,
-                    error_prefix=error_prefix.encode() if error_prefix else None,
-                )
-                return gen if not exhaust_stream else [*gen]
-        else:
+        if not stream:
             try:
-                return _load_json_or_str(response.text)
+                return _load_json_or_str(response.data.decode(self.charset))
             finally:
-                response.close()
+                response.release_conn()
+        else:
+            def iter_content():
+                try:
+                    if hasattr(response, "stream"):
+                        yield from response.stream(stream_read_size, decode_content=True)
+                    else:
+                        while True:
+                            data = response.read(stream_read_size)
+                            if not data:
+                                break
+                            yield data
+                finally:
+                    response.release_conn()
 
-    def _iter_chunks(
-            self,
-            response: requests.Response,
-            chunk_delimiter: bytes,
-            chunk_prefix: bytes,
-            chunk_suffix: bytes,
-            error_prefix: bytes
-    ) -> Iterable:
-        try:
-            error = None
-            for chunk in response.iter_lines(decode_unicode=False, delimiter=chunk_delimiter):
+            def iter_lines(contents: Iterable[bytes]) -> Iterable[str]:
+                delimiter = chunk_delimiter.encode(self.charset) if chunk_delimiter is not None else None
+                pending = None
+                for data in contents:
+                    if pending is not None:
+                        data = pending + data
+
+                    lines = data.split(delimiter) if delimiter else data.splitlines()
+                    pending = lines.pop() if lines and lines[-1] and lines[-1][-1] == data[-1] else None
+
+                    for line in lines:
+                        yield line.decode(self.charset)
+
+                if pending is not None:
+                    yield pending.decode(self.charset)
+
+            def iter_chunks(lines: Iterable[str]):
+                error = None
+                for chunk in lines:
+                    if error is not None:
+                        # error is not None means there is a fatal exception raised from the server side.
+                        # The client should just complete the stream and then raise the error to the upper.
+                        continue
+
+                    if not chunk:
+                        continue
+
+                    if error_prefix is not None:
+                        if chunk.startswith(error_prefix):
+                            chunk = chunk[len(error_prefix):]
+                            error = ServiceError(chunk)
+                            continue
+
+                    if chunk_prefix is not None:
+                        if chunk.startswith(chunk_prefix):
+                            chunk = chunk[len(chunk_prefix):]
+                        else:
+                            continue
+
+                    if chunk_suffix is not None:
+                        if chunk.endswith(chunk_suffix):
+                            chunk = chunk[:-len(chunk_suffix)]
+                        else:
+                            continue
+
+                    yield _load_json_or_str(chunk)
+
                 if error is not None:
-                    # error is not None means there is a fatal exception raised from the server side.
-                    # The client should just complete the stream and then raise the error to the upper.
-                    continue
+                    raise error
 
-                if not chunk:
-                    continue
-
-                if error_prefix is not None:
-                    if chunk.startswith(error_prefix):
-                        chunk = chunk[len(error_prefix):]
-                        error = ServiceError(chunk)
-                        continue
-
-                if chunk_prefix is not None:
-                    if chunk.startswith(chunk_prefix):
-                        chunk = chunk[len(chunk_prefix):]
-                    else:
-                        continue
-
-                if chunk_suffix is not None:
-                    if chunk.endswith(chunk_suffix):
-                        chunk = chunk[:-len(chunk_suffix)]
-                    else:
-                        continue
-
-                yield _load_json_or_str(chunk)
-
-            if error is not None:
-                raise error
-        finally:
-            response.close()
+            gen = iter_content()
+            gen = iter_lines(gen)
+            gen = iter_chunks(gen)
+            return gen if not exhaust_stream else [*gen]

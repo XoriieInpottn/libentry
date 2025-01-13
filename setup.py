@@ -18,7 +18,7 @@ if __name__ == '__main__':
                 'libentry_test_api = libentry.test_api:main'
             ]
         },
-        version='1.19',
+        version='1.20',
         description='Entries for experimental utilities.',
         long_description_content_type='text/markdown',
         long_description=long_description,
@@ -33,12 +33,12 @@ if __name__ == '__main__':
         include_package_data=True,
         zip_safe=True,
         install_requires=[
-            "requests",
             "pydantic",
-            "numpy",
-            "json5",
             "PyYAML",
+            "numpy",
+            "urllib3",
             "Flask",
             "gunicorn",
+            "psutil",
         ]
     )
