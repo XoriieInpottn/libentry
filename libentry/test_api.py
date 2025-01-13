@@ -21,6 +21,7 @@ class TestRequest(BaseModel):
     timeout: float = 15
     num_threads: int = 1
     num_calls: int = 1
+    stream: bool = False
     quiet: bool = False
     max_resp_len: int = 100
 
@@ -42,7 +43,8 @@ def test(request: TestRequest):
             try:
                 kwargs = dict(
                     on_error=lambda err: print(f"[{tid}:{cid}:RETRY] {err}"),
-                    timeout=request.timeout
+                    timeout=request.timeout,
+                    stream=request.stream
                 )
                 t = time()
                 if request.method == "GET":
@@ -56,12 +58,26 @@ def test(request: TestRequest):
                         request.data,
                         **kwargs
                     )
-                t = time() - t
+                if not request.stream:
+                    t = time() - t
+                    if not request.quiet:
+                        content = str(response).replace("\n", "\\n")
+                        print(f"[{tid}:{cid}:SUCCESS] Response={content:.{request.max_resp_len}} Time={t:.04f}")
+                else:
+                    if not request.quiet and request.num_threads == 1:
+                        print(f"[{tid}:{cid}:SUCCESS] Response=[", end="", flush=True)
+                        for chunk in response:
+                            print(f"'{chunk}', ", end="", flush=True)
+                        t = time() - t
+                        print(f"] Time={t:.04f}", flush=True)
+                    else:
+                        content = [*response]
+                        t = time() - t
+                        if not request.quiet:
+                            content = str(content).replace("\n", "\\n")
+                            print(f"[{tid}:{cid}:SUCCESS] Response={content:.{request.max_resp_len}} Time={t:.04f}")
                 with lock:
                     time_list.append(t)
-                if not request.quiet:
-                    content = str(response).replace("\n", " ")
-                    print(f"[{tid}:{cid}:SUCCESS] Time={t:.04f} Response={content:.{request.max_resp_len}}")
             except Exception as e:
                 print(f"[{tid}:{cid}:FAILED] {e}")
 
@@ -93,6 +109,7 @@ def main():
     parser.add_argument("--timeout", type=float, default=15)
     parser.add_argument("--num_threads", "-t", type=int, default=1)
     parser.add_argument("--num_calls", "-c", type=int, default=1)
+    parser.add_argument("--stream", "-s", action="store_true")
     parser.add_argument("--quiet", "-q", action="store_true")
     args = parser.parse_args()
 
@@ -110,6 +127,7 @@ def main():
         timeout=args.timeout,
         num_threads=args.num_threads,
         num_calls=args.num_calls,
+        stream=args.stream,
         quiet=args.quiet
     ))
     print(response.model_dump_json(indent=4))
