@@ -57,11 +57,15 @@ def parse_type(annotation, context: MutableMapping[str, Schema]) -> Union[str, L
         origin=origin
     )
 
-    parser_list = _TYPE_PARSERS if isinstance(origin, type) else _GENERIC_PARSERS
-    for parser in parser_list:
+    for parser in _GENERIC_PARSERS:
         output = parser(pc)
         if output is not None:
             return output
+    if isinstance(origin, type):
+        for parser in _TYPE_PARSERS:
+            output = parser(pc)
+            if output is not None:
+                return output
     raise TypeError(f"Unsupported type \"{origin}\".")
 
 
