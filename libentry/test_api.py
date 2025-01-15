@@ -43,8 +43,7 @@ def test(request: TestRequest):
             try:
                 kwargs = dict(
                     on_error=lambda err: print(f"[{tid}:{cid}:RETRY] {err}"),
-                    timeout=request.timeout,
-                    stream=request.stream
+                    timeout=request.timeout
                 )
                 t = time()
                 if request.method == "GET":
@@ -56,6 +55,7 @@ def test(request: TestRequest):
                     response = APIClient().post(
                         request.url,
                         request.data,
+                        stream=request.stream,
                         **kwargs
                     )
                 if not request.stream:
