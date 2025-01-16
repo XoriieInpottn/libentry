@@ -12,9 +12,10 @@ __all__ = [
 
 from dataclasses import dataclass, field
 from time import sleep
-from typing import Any, Callable, Iterable, List, Literal, Mapping, Optional, Tuple
+from typing import Any, AsyncIterable, Callable, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 from urllib.parse import urljoin
 
+import httpx
 from urllib3 import PoolManager
 from urllib3.exceptions import HTTPError, TimeoutError
 
@@ -170,7 +171,7 @@ class ServiceError(RuntimeError):
 ErrorCallback = Callable[[Exception], None]
 
 
-class APIClient:
+class BaseClient:
 
     def __init__(
             self,
@@ -181,6 +182,8 @@ class APIClient:
             user_agent: str = "API Client",
             connection: str = "close",
             verify=False,
+            stream_read_size: int = 512,
+            charset: str = "UTF-8",
             **extra_headers
     ) -> None:
         self.base_url = base_url
@@ -194,43 +197,89 @@ class APIClient:
         if api_key is not None:
             self.headers["Authorization"] = f"Bearer {api_key}"
         self.verify = verify
-        self.charset = "UTF-8"
+        self.stream_read_size = stream_read_size
+        self.charset = charset
 
     DEFAULT_CONN_POOL_SIZE = 10
-    CONN_POOL = (
-        PoolManager(DEFAULT_CONN_POOL_SIZE),
-        PoolManager(DEFAULT_CONN_POOL_SIZE, cert_reqs='CERT_NONE')
+    URLLIB3_POOL = (
+        PoolManager(DEFAULT_CONN_POOL_SIZE, cert_reqs='CERT_NONE'),
+        PoolManager(DEFAULT_CONN_POOL_SIZE)
     )
 
-    def _request(
+    def _single_request(
+            self,
+            method: str,
+            url: str,
+            body: Optional[Union[bytes, str]],
+            headers: Optional[Mapping[str, str]],
+            timeout: float,
+            stream: bool,
+            verify: bool,
+    ) -> Union[bytes, Iterable[bytes]]:
+        response = self.URLLIB3_POOL[int(verify)].request(
+            method=method,
+            url=url,
+            body=body,
+            headers=headers,
+            timeout=timeout,
+            preload_content=not stream
+        )
+
+        if response.status != 200:
+            try:
+                raise ServiceError(response.data.decode(self.charset))
+            finally:
+                response.release_conn()
+
+        if not stream:
+            try:
+                return response.data
+            finally:
+                response.release_conn()
+        else:
+            def iter_content():
+                try:
+                    if hasattr(response, "stream"):
+                        yield from response.stream(self.stream_read_size, decode_content=True)
+                    else:
+                        while True:
+                            data = response.read(self.stream_read_size)
+                            if not data:
+                                break
+                            yield data
+                finally:
+                    response.release_conn()
+
+            return iter_content()
+
+    def request(
             self,
             method: Literal["GET", "POST"],
             url: str,
-            body: Optional[str] = None,
+            body: Optional[Union[bytes, str]] = None,
             headers: Optional[Mapping[str, str]] = None,
-            stream: bool = False,
-            num_trials: int = 5,
             timeout: float = 15,
+            num_trials: int = 5,
             interval: float = 1,
             retry_factor: float = 0.5,
             on_error: Optional[ErrorCallback] = None,
+            stream: bool = False,
             verify: Optional[bool] = None,
-    ):
+    ) -> Union[bytes, Iterable[bytes]]:
         headers = self.headers if headers is None else headers
         verify = self.verify if verify is None else verify
-        preload_content = not stream
 
-        pool = self.CONN_POOL[int(not verify)]
         err = None
         for i in range(num_trials):
             try:
-                return pool.request(
+                return self._single_request(
                     method=method,
                     url=url,
                     body=body,
                     headers=headers,
                     timeout=timeout * (1 + i * retry_factor),
-                    preload_content=preload_content
+                    stream=stream,
+                    verify=verify,
                 )
             except TimeoutError as e:
                 err = e
@@ -243,98 +292,141 @@ class APIClient:
             sleep(interval)
         raise err
 
-    def get(
+    HTTPX_POOL = httpx.Limits(max_keepalive_connections=DEFAULT_CONN_POOL_SIZE)
+
+    async def _single_request_async(
             self,
-            path: Optional[str] = None, *,
-            num_trials: int = 5,
-            timeout: float = 15,
-            interval: float = 1,
-            retry_factor: float = 0.5,
-            on_error: Optional[ErrorCallback] = None
+            method: str,
+            url: str,
+            body: Optional[Union[bytes, str]],
+            headers: Optional[Mapping[str, str]],
+            timeout: float,
+            stream: bool,
+            verify: bool,
     ):
-        full_url = urljoin(self.base_url, path)
-        response = self._request(
-            method="GET",
-            url=full_url,
-            num_trials=num_trials,
-            timeout=timeout,
-            interval=interval,
-            retry_factor=retry_factor,
-            on_error=on_error
-        )
+        if not stream:
+            async with httpx.AsyncClient(headers=headers, verify=verify) as client:
+                response = await client.request(
+                    method=method,
+                    url=url,
+                    content=body,
+                    timeout=timeout
+                )
+                try:
+                    if response.status_code != 200:
+                        raise ServiceError(response.content.decode(self.charset))
+                    return response.content
+                finally:
+                    await response.aclose()
+        else:
+            client = httpx.AsyncClient(headers=headers, verify=verify)
+            response = client.stream(
+                method=method,
+                url=url,
+                content=body,
+                timeout=timeout
+            )
 
-        if response.status != 200:
-            text = response.data.decode(self.charset)
-            response.release_conn()
-            raise ServiceError(text)
+            async def iter_content():
+                try:
+                    async with response as r:
+                        if r.status_code != 200:
+                            content = await r.aread()
+                            raise ServiceError(content.decode(self.charset))
+                        async for data in r.aiter_bytes():
+                            yield data
+                finally:
+                    await client.aclose()
 
-        try:
-            return _load_json_or_str(response.data.decode(self.charset))
-        finally:
-            response.release_conn()
+            return iter_content()
 
-    def post(
+    async def request_async(
             self,
-            path: Optional[str] = None,
-            json_data: Optional[Mapping] = None, *,
-            stream: bool = False,
-            exhaust_stream: bool = False,
-            num_trials: int = 5,
+            method: Literal["GET", "POST"],
+            url: str,
+            body: Optional[Union[bytes, str]] = None,
+            headers: Optional[Mapping[str, str]] = None,
             timeout: float = 15,
+            num_trials: int = 5,
             interval: float = 1,
             retry_factor: float = 0.5,
             on_error: Optional[ErrorCallback] = None,
+            stream: bool = False,
+            verify: Optional[bool] = None,
+    ):
+        headers = self.headers if headers is None else headers
+        verify = self.verify if verify is None else verify
+
+        err = None
+        for i in range(num_trials):
+            try:
+                return await self._single_request_async(
+                    method=method,
+                    url=url,
+                    body=body,
+                    headers=headers,
+                    timeout=timeout * (1 + i * retry_factor),
+                    stream=stream,
+                    verify=verify,
+                )
+            except httpx.Timeout as e:
+                err = e
+                if callable(on_error):
+                    on_error(e)
+            except httpx.HTTPError as e:
+                err = e
+                if callable(on_error):
+                    on_error(e)
+            sleep(interval)
+        raise err
+
+
+class APIClient(BaseClient):
+
+    def request(
+            self,
+            method: Literal["GET", "POST"],
+            path: str,
+            json_data: Optional[Mapping] = None,
+            *,
+            headers: Optional[Mapping[str, str]] = None,
+            timeout: float = 15,
+            num_trials: int = 5,
+            interval: float = 1,
+            retry_factor: float = 0.5,
+            on_error: Optional[ErrorCallback] = None,
+            stream: bool = False,
             chunk_delimiter: str = "\n\n",
             chunk_prefix: str = None,
             chunk_suffix: str = None,
             error_prefix: str = "ERROR: ",
-            stream_read_size: int = 512
+            exhaust_stream: bool = False,
+            verify: Optional[bool] = None,
     ):
         full_url = urljoin(self.base_url, path)
-
         headers = {**self.headers}
         headers["Accept"] = headers["Accept"] + f"; stream={int(stream)}"
         body = json.dumps(json_data) if json_data is not None else None
-        response = self._request(
-            "POST",
-            url=full_url,
+        content = super().request(
+            method,
+            full_url,
             body=body,
             headers=headers,
-            stream=stream,
-            num_trials=num_trials,
             timeout=timeout,
+            num_trials=num_trials,
             interval=interval,
             retry_factor=retry_factor,
-            on_error=on_error
+            on_error=on_error,
+            stream=stream,
+            verify=verify,
         )
-        if response.status != 200:
-            text = response.data.decode(self.charset)
-            response.release_conn()
-            raise ServiceError(text)
-
         if not stream:
-            try:
-                return _load_json_or_str(response.data.decode(self.charset))
-            finally:
-                response.release_conn()
+            return _load_json_or_str(content.decode(self.charset))
         else:
-            def iter_content():
-                try:
-                    if hasattr(response, "stream"):
-                        yield from response.stream(stream_read_size, decode_content=True)
-                    else:
-                        while True:
-                            data = response.read(stream_read_size)
-                            if not data:
-                                break
-                            yield data
-                finally:
-                    response.release_conn()
-
-            def iter_lines(contents: Iterable[bytes]) -> Iterable[str]:
+            def iter_lines(data_list: Iterable[bytes]) -> Iterable[str]:
                 delimiter = chunk_delimiter.encode(self.charset) if chunk_delimiter is not None else None
                 pending = None
-                for data in contents:
+                for data in data_list:
                     if pending is not None:
                         data = pending + data
 
@@ -381,7 +473,208 @@ class APIClient:
                 if error is not None:
                     raise error
 
-            gen = iter_content()
-            gen = iter_lines(gen)
+            gen = iter_lines(content)
             gen = iter_chunks(gen)
             return gen if not exhaust_stream else [*gen]
+
+    def get(
+            self,
+            path: Optional[str] = None,
+            *,
+            timeout: float = 15,
+            num_trials: int = 5,
+            interval: float = 1,
+            retry_factor: float = 0.5,
+            on_error: Optional[ErrorCallback] = None
+    ):
+        return self.request(
+            "GET",
+            path,
+            timeout=timeout,
+            num_trials=num_trials,
+            interval=interval,
+            retry_factor=retry_factor,
+            on_error=on_error,
+        )
+
+    def post(
+            self,
+            path: Optional[str] = None,
+            json_data: Optional[Mapping] = None,
+            *,
+            timeout: float = 15,
+            num_trials: int = 5,
+            interval: float = 1,
+            retry_factor: float = 0.5,
+            on_error: Optional[ErrorCallback] = None,
+            stream: bool = False,
+            chunk_delimiter: str = "\n\n",
+            chunk_prefix: str = None,
+            chunk_suffix: str = None,
+            error_prefix: str = "ERROR: ",
+            exhaust_stream: bool = False,
+    ):
+        return self.request(
+            "POST",
+            path,
+            json_data=json_data,
+            timeout=timeout,
+            num_trials=num_trials,
+            interval=interval,
+            retry_factor=retry_factor,
+            on_error=on_error,
+            stream=stream,
+            chunk_delimiter=chunk_delimiter,
+            chunk_prefix=chunk_prefix,
+            chunk_suffix=chunk_suffix,
+            error_prefix=error_prefix,
+            exhaust_stream=exhaust_stream,
+        )
+
+    async def request_async(
+            self,
+            method: Literal["GET", "POST"],
+            path: str,
+            json_data: Optional[Mapping] = None,
+            *,
+            headers: Optional[Mapping[str, str]] = None,
+            timeout: float = 15,
+            num_trials: int = 5,
+            interval: float = 1,
+            retry_factor: float = 0.5,
+            on_error: Optional[ErrorCallback] = None,
+            stream: bool = False,
+            chunk_delimiter: str = "\n\n",
+            chunk_prefix: str = None,
+            chunk_suffix: str = None,
+            error_prefix: str = "ERROR: ",
+            exhaust_stream: bool = False,
+            verify: Optional[bool] = None,
+    ):
+        full_url = urljoin(self.base_url, path)
+        headers = {**self.headers}
+        headers["Accept"] = headers["Accept"] + f"; stream={int(stream)}"
+        body = json.dumps(json_data) if json_data is not None else None
+        content = await super().request_async(
+            method,
+            full_url,
+            body=body,
+            headers=headers,
+            timeout=timeout,
+            num_trials=num_trials,
+            interval=interval,
+            retry_factor=retry_factor,
+            on_error=on_error,
+            stream=stream,
+            verify=verify,
+        )
+        if not stream:
+            return _load_json_or_str(content.decode(self.charset))
+        else:
+            async def iter_lines(data_list: AsyncIterable[bytes]) -> AsyncIterable[str]:
+                delimiter = chunk_delimiter.encode(self.charset) if chunk_delimiter is not None else None
+                pending = None
+                async for data in data_list:
+                    if pending is not None:
+                        data = pending + data
+
+                    lines = data.split(delimiter) if delimiter else data.splitlines()
+                    pending = lines.pop() if lines and lines[-1] and lines[-1][-1] == data[-1] else None
+
+                    for line in lines:
+                        yield line.decode(self.charset)
+
+                if pending is not None:
+                    yield pending.decode(self.charset)
+
+            async def iter_chunks(lines: AsyncIterable[str]) -> AsyncIterable:
+                error = None
+                async for chunk in lines:
+                    if error is not None:
+                        # error is not None means there is a fatal exception raised from the server side.
+                        # The client should just complete the stream and then raise the error to the upper.
+                        continue
+
+                    if not chunk:
+                        continue
+
+                    if error_prefix is not None:
+                        if chunk.startswith(error_prefix):
+                            chunk = chunk[len(error_prefix):]
+                            error = ServiceError(chunk)
+                            continue
+
+                    if chunk_prefix is not None:
+                        if chunk.startswith(chunk_prefix):
+                            chunk = chunk[len(chunk_prefix):]
+                        else:
+                            continue
+
+                    if chunk_suffix is not None:
+                        if chunk.endswith(chunk_suffix):
+                            chunk = chunk[:-len(chunk_suffix)]
+                        else:
+                            continue
+
+                    yield _load_json_or_str(chunk)
+
+                if error is not None:
+                    raise error
+
+            gen = iter_lines(content)
+            gen = iter_chunks(gen)
+            return gen if not exhaust_stream else [*gen]
+
+    async def get_async(
+            self,
+            path: Optional[str] = None,
+            *,
+            timeout: float = 15,
+            num_trials: int = 5,
+            interval: float = 1,
+            retry_factor: float = 0.5,
+            on_error: Optional[ErrorCallback] = None
+    ):
+        return await self.request_async(
+            "GET",
+            path,
+            timeout=timeout,
+            num_trials=num_trials,
+            interval=interval,
+            retry_factor=retry_factor,
+            on_error=on_error,
+        )
+
+    async def post_async(
+            self,
+            path: Optional[str] = None,
+            json_data: Optional[Mapping] = None,
+            *,
+            timeout: float = 15,
+            num_trials: int = 5,
+            interval: float = 1,
+            retry_factor: float = 0.5,
+            on_error: Optional[ErrorCallback] = None,
+            stream: bool = False,
+            chunk_delimiter: str = "\n\n",
+            chunk_prefix: str = None,
+            chunk_suffix: str = None,
+            error_prefix: str = "ERROR: ",
+            exhaust_stream: bool = False,
+    ):
+        return await self.request_async(
+            "POST",
+            path,
+            json_data=json_data,
+            timeout=timeout,
+            num_trials=num_trials,
+            interval=interval,
+            retry_factor=retry_factor,
+            on_error=on_error,
+            stream=stream,
+            chunk_delimiter=chunk_delimiter,
+            chunk_prefix=chunk_prefix,
+            chunk_suffix=chunk_suffix,
+            error_prefix=error_prefix,
+            exhaust_stream=exhaust_stream,
+        )
