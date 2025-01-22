@@ -369,7 +369,7 @@ class BaseClient:
                     stream=stream,
                     verify=verify,
                 )
-            except httpx.Timeout as e:
+            except httpx.TimeoutException as e:
                 err = e
                 if callable(on_error):
                     on_error(e)
