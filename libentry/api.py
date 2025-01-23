@@ -14,7 +14,7 @@ import asyncio
 from dataclasses import dataclass, field
 from time import sleep
 from typing import Any, AsyncIterable, Callable, Iterable, List, Literal, Mapping, Optional, Tuple, Union
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin
 
 import httpx
 from urllib3 import PoolManager
@@ -386,6 +386,19 @@ class BaseClient:
 
 class APIClient(BaseClient):
 
+    @staticmethod
+    def _encode_params(data):
+        result = []
+        for k, v in data.items():
+            if v is not None:
+                result.append(
+                    (
+                        k.encode("utf-8") if isinstance(k, str) else k,
+                        v.encode("utf-8") if isinstance(v, str) else v,
+                    )
+                )
+        return urlencode(result, doseq=True)
+
     def request(
             self,
             method: Literal["GET", "POST"],
@@ -411,7 +424,14 @@ class APIClient(BaseClient):
             headers = {}
         accept = headers["Accept"] if "Accept" in headers else self.headers["Accept"]
         headers["Accept"] = accept + f"; stream={int(stream)}"
-        body = json.dumps(json_data) if json_data is not None else None
+        content_type = headers.get("Content-Type")
+        if content_type is None or content_type == "application/json":
+            body = json.dumps(json_data) if json_data is not None else None
+        elif content_type == "application/x-www-form-urlencoded":
+            body = self._encode_params(json_data)
+        else:
+            raise ValueError(f"Unsupported content type \"{content_type}\".")
+
         content = super().request(
             method,
             full_url,
@@ -565,7 +585,14 @@ class APIClient(BaseClient):
             headers = {}
         accept = headers["Accept"] if "Accept" in headers else self.headers["Accept"]
         headers["Accept"] = accept + f"; stream={int(stream)}"
-        body = json.dumps(json_data) if json_data is not None else None
+        content_type = headers.get("Content-Type")
+        if content_type is None or content_type == "application/json":
+            body = json.dumps(json_data) if json_data is not None else None
+        elif content_type == "application/x-www-form-urlencoded":
+            body = self._encode_params(json_data)
+        else:
+            raise ValueError(f"Unsupported content type \"{content_type}\".")
+
         content = await super().request_async(
             method,
             full_url,
