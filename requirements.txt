@@ -2,6 +2,7 @@ pydantic
 PyYAML
 numpy
 urllib3
+httpx
 Flask
 gunicorn
 psutil

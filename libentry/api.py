@@ -10,6 +10,7 @@ __all__ = [
     "APIClient",
 ]
 
+import asyncio
 from dataclasses import dataclass, field
 from time import sleep
 from typing import Any, AsyncIterable, Callable, Iterable, List, Literal, Mapping, Optional, Tuple, Union
@@ -216,6 +217,7 @@ class BaseClient:
             stream: bool,
             verify: bool,
     ) -> Union[bytes, Iterable[bytes]]:
+        headers = self.headers if headers is None else {**self.headers, **headers}
         response = self.URLLIB3_POOL[int(verify)].request(
             method=method,
             url=url,
@@ -304,6 +306,7 @@ class BaseClient:
             stream: bool,
             verify: bool,
     ):
+        headers = self.headers if headers is None else {**self.headers, **headers}
         if not stream:
             async with httpx.AsyncClient(headers=headers, verify=verify) as client:
                 response = await client.request(
@@ -377,7 +380,7 @@ class BaseClient:
                 err = e
                 if callable(on_error):
                     on_error(e)
-            sleep(interval)
+            await asyncio.sleep(interval)
         raise err
 
 
@@ -404,8 +407,10 @@ class APIClient(BaseClient):
             verify: Optional[bool] = None,
     ):
         full_url = urljoin(self.base_url, path)
-        headers = {**self.headers}
-        headers["Accept"] = headers["Accept"] + f"; stream={int(stream)}"
+        if headers is None:
+            headers = {}
+        accept = headers["Accept"] if "Accept" in headers else self.headers["Accept"]
+        headers["Accept"] = accept + f"; stream={int(stream)}"
         body = json.dumps(json_data) if json_data is not None else None
         content = super().request(
             method,
@@ -481,6 +486,7 @@ class APIClient(BaseClient):
             self,
             path: Optional[str] = None,
             *,
+            headers: Optional[Mapping[str, str]] = None,
             timeout: float = 15,
             num_trials: int = 5,
             interval: float = 1,
@@ -490,6 +496,7 @@ class APIClient(BaseClient):
         return self.request(
             "GET",
             path,
+            headers=headers,
             timeout=timeout,
             num_trials=num_trials,
             interval=interval,
@@ -502,6 +509,7 @@ class APIClient(BaseClient):
             path: Optional[str] = None,
             json_data: Optional[Mapping] = None,
             *,
+            headers: Optional[Mapping[str, str]] = None,
             timeout: float = 15,
             num_trials: int = 5,
             interval: float = 1,
@@ -518,6 +526,7 @@ class APIClient(BaseClient):
             "POST",
             path,
             json_data=json_data,
+            headers=headers,
             timeout=timeout,
             num_trials=num_trials,
             interval=interval,
@@ -552,8 +561,10 @@ class APIClient(BaseClient):
             verify: Optional[bool] = None,
     ):
         full_url = urljoin(self.base_url, path)
-        headers = {**self.headers}
-        headers["Accept"] = headers["Accept"] + f"; stream={int(stream)}"
+        if headers is None:
+            headers = {}
+        accept = headers["Accept"] if "Accept" in headers else self.headers["Accept"]
+        headers["Accept"] = accept + f"; stream={int(stream)}"
         body = json.dumps(json_data) if json_data is not None else None
         content = await super().request_async(
             method,
@@ -629,6 +640,7 @@ class APIClient(BaseClient):
             self,
             path: Optional[str] = None,
             *,
+            headers: Optional[Mapping[str, str]] = None,
             timeout: float = 15,
             num_trials: int = 5,
             interval: float = 1,
@@ -638,6 +650,7 @@ class APIClient(BaseClient):
         return await self.request_async(
             "GET",
             path,
+            headers=headers,
             timeout=timeout,
             num_trials=num_trials,
             interval=interval,
@@ -650,6 +663,7 @@ class APIClient(BaseClient):
             path: Optional[str] = None,
             json_data: Optional[Mapping] = None,
             *,
+            headers: Optional[Mapping[str, str]] = None,
             timeout: float = 15,
             num_trials: int = 5,
             interval: float = 1,
@@ -666,6 +680,7 @@ class APIClient(BaseClient):
             "POST",
             path,
             json_data=json_data,
+            headers=headers,
             timeout=timeout,
             num_trials=num_trials,
             interval=interval,
