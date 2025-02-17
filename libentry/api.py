@@ -427,8 +427,7 @@ class APIClient(BaseClient):
             verify: Optional[bool] = None,
     ):
         full_url = urljoin(self.base_url, path)
-        if headers is None:
-            headers = {}
+        headers = {**headers} if headers else {}
         accept = headers["Accept"] if "Accept" in headers else self.headers["Accept"]
         headers["Accept"] = accept + f"; stream={int(stream)}"
         content_type = headers.get("Content-Type")
@@ -588,8 +587,7 @@ class APIClient(BaseClient):
             verify: Optional[bool] = None,
     ):
         full_url = urljoin(self.base_url, path)
-        if headers is None:
-            headers = {}
+        headers = {**headers} if headers else {}
         accept = headers["Accept"] if "Accept" in headers else self.headers["Accept"]
         headers["Accept"] = accept + f"; stream={int(stream)}"
         content_type = headers.get("Content-Type")
