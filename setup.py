@@ -18,7 +18,7 @@ if __name__ == '__main__':
                 'libentry_test_api = libentry.test_api:main'
             ]
         },
-        version='1.22',
+        version='1.22.1',
         description='Entries for experimental utilities.',
         long_description_content_type='text/markdown',
         long_description=long_description,

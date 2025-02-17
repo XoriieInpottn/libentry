@@ -207,6 +207,13 @@ class BaseClient:
         PoolManager(DEFAULT_CONN_POOL_SIZE)
     )
 
+    @classmethod
+    def reset_connection_pool(cls, size: int = 10):
+        cls.URLLIB3_POOL = (
+            PoolManager(size, cert_reqs='CERT_NONE'),
+            PoolManager(size)
+        )
+
     def _single_request(
             self,
             method: str,
