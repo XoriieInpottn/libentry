@@ -200,11 +200,11 @@ class BaseClient:
         self.verify = verify
         self.stream_read_size = stream_read_size
         self.charset = charset
-
+    # TODO, 建议, `HTTPConnectionPool`的maxsize调大一点, maxsize=1(default)
     DEFAULT_CONN_POOL_SIZE = 10
     URLLIB3_POOL = (
-        PoolManager(DEFAULT_CONN_POOL_SIZE, cert_reqs='CERT_NONE'),
-        PoolManager(DEFAULT_CONN_POOL_SIZE)
+        PoolManager(DEFAULT_CONN_POOL_SIZE, cert_reqs='CERT_NONE', maxsize=100),
+        PoolManager(DEFAULT_CONN_POOL_SIZE, maxsize=100)
     )
 
     @classmethod
