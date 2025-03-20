@@ -428,9 +428,9 @@ class APIClient(BaseClient):
     ):
         full_url = urljoin(self.base_url, path)
         headers = {**headers} if headers else {}
-        accept = headers["Accept"] if "Accept" in headers else self.headers["Accept"]
+        accept = headers.get("Accept", self.headers.get("Accept"))
         headers["Accept"] = accept + f"; stream={int(stream)}"
-        content_type = headers.get("Content-Type")
+        content_type = headers.get("Content-Type", self.headers.get("Content-Type"))
         if content_type is None or content_type == "application/json":
             body = json.dumps(json_data) if json_data is not None else None
         elif content_type == "application/x-www-form-urlencoded":
@@ -588,9 +588,9 @@ class APIClient(BaseClient):
     ):
         full_url = urljoin(self.base_url, path)
         headers = {**headers} if headers else {}
-        accept = headers["Accept"] if "Accept" in headers else self.headers["Accept"]
+        accept = headers.get("Accept", self.headers.get("Accept"))
         headers["Accept"] = accept + f"; stream={int(stream)}"
-        content_type = headers.get("Content-Type")
+        content_type = headers.get("Content-Type", self.headers.get("Content-Type"))
         if content_type is None or content_type == "application/json":
             body = json.dumps(json_data) if json_data is not None else None
         elif content_type == "application/x-www-form-urlencoded":
