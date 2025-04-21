@@ -371,6 +371,7 @@ def run_service(
         worker_class: str = "gthread",
         timeout: int = 60,
         keyfile: Optional[str] = None,
+        keyfile_password: Optional[str] = None,
         certfile: Optional[str] = None
 ):
     logger.info("Starting gunicorn server.")
@@ -378,6 +379,18 @@ def run_service(
         num_connections = num_threads * 2
     if backlog is None or backlog < num_threads * 2:
         backlog = num_threads * 2
+
+    def ssl_context(config, default_ssl_context_factory):
+        import ssl
+        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        context.load_cert_chain(
+            certfile=config.certfile,
+            keyfile=config.keyfile,
+            password=keyfile_password
+        )
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        return context
+
     options = {
         "bind": f"{host}:{port}",
         "workers": num_workers,
@@ -387,9 +400,9 @@ def run_service(
         "backlog": backlog,
         "keyfile": keyfile,
         "certfile": certfile,
-        "worker_class": worker_class
+        "worker_class": worker_class,
+        "ssl_context": ssl_context
     }
     for name, value in options.items():
         logger.info(f"Option {name}: {value}")
     GunicornApplication(service_type, service_config, options).run()
-

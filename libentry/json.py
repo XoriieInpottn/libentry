@@ -13,6 +13,7 @@ from base64 import b64decode, b64encode
 from functools import partial
 
 import numpy as np
+from pydantic import BaseModel
 
 _BINDINGS = []
 
@@ -26,6 +27,9 @@ def bind(name, type_):
 
 
 def custom_encode(o) -> dict:
+    if isinstance(o, BaseModel):
+        return o.model_dump()
+
     for name, type_, support in _BINDINGS:
         if isinstance(o, type_):
             doc = support.encode(o)
