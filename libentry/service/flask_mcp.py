@@ -247,7 +247,7 @@ class JSONAdapter:
         assert hasattr(fn, "__name__")
         self.__name__ = fn.__name__
         self.fn = MCPAdapter(fn) if not isinstance(fn, MCPAdapter) else fn
-        self.type_adapter = TypeAdapter(Union[JSONRPCNotification, JSONRPCRequest])
+        self.type_adapter = TypeAdapter(Union[JSONRPCRequest, JSONRPCNotification])
 
     def __call__(self, json_input: Dict[str, Any]) -> Any:
         mcp_request = self.type_adapter.validate_python(json_input)
@@ -317,25 +317,10 @@ class FlaskFunction:
             )
         elif isinstance(mcp_response, (GeneratorType, range)):
             if self.CONTENT_TYPE_SSE in accepts:
-                def _sse_stream():
-                    for item in mcp_response:
-                        if not isinstance(item, SSEEvent):
-                            item = SSEEvent.model_validate(item)
-                        yield "event:"
-                        yield item.event
-                        d = item.data
-                        if d is not None:
-                            yield "\n"
-                            yield "data:"
-                            if isinstance(d, BaseModel):
-                                yield json.dumps(d.model_dump(exclude_none=True))
-                            elif isinstance(d, Dict):
-                                yield json.dumps(d)
-                            else:
-                                yield str(d)
-                        yield "\n\n"
-
-                return self.app.ok(_sse_stream(), mimetype=self.CONTENT_TYPE_SSE)
+                return self.app.ok(
+                    self._sse_stream(mcp_response),
+                    mimetype=self.CONTENT_TYPE_SSE
+                )
             else:
                 return self.app.error(f"Unsupported Accept: \"{[*accepts]}\".")
         else:
@@ -343,6 +328,24 @@ class FlaskFunction:
                 str(mcp_response),
                 mimetype=self.CONTENT_TYPE_JSON
             )
+
+    def _sse_stream(self, events: Iterable):
+        for item in events:
+            if not isinstance(item, SSEEvent):
+                item = SSEEvent.model_validate(item)
+            yield "event:"
+            yield item.event
+            d = item.data
+            if d is not None:
+                yield "\n"
+                yield "data:"
+                if isinstance(d, BaseModel):
+                    yield json.dumps(d.model_dump(exclude_none=True))
+                elif isinstance(d, Dict):
+                    yield json.dumps(d)
+                else:
+                    yield str(d)
+            yield self.api_info.chunk_delimiter
 
 
 class SSEMixIn:
