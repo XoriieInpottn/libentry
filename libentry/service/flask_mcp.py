@@ -31,7 +31,7 @@ from flask import Flask, request as flask_request
 from pydantic import BaseModel, Field, TypeAdapter
 
 from libentry import api, json, logger
-from libentry.api import APIInfo, list_api_info
+from libentry.api import APIInfo, ContentType, list_api_info
 from libentry.schema import query_api
 
 try:
@@ -76,8 +76,12 @@ class JSONRPCError(BaseModel):
             err_name = f"{module}.{err_name}"
         return cls(
             code=0,
-            message=f"{err_name}: {str(e)}",
-            data=traceback.format_exc()
+            message=str(e),
+            data={
+                "error": err_name,
+                "message": str(e),
+                "traceback": traceback.format_exc()
+            }
         )
 
 
@@ -265,9 +269,6 @@ class FlaskFunction:
         assert hasattr(fn, "__name__")
         self.__name__ = fn.__name__
 
-    CONTENT_TYPE_JSON = "application/json"
-    CONTENT_TYPE_SSE = "text/event-stream"
-
     def __call__(self):
         args = flask_request.args
         data = flask_request.data
@@ -275,7 +276,7 @@ class FlaskFunction:
 
         json_from_url = {**args}
         if data:
-            if (not content_type) or content_type == self.CONTENT_TYPE_JSON:
+            if (not content_type) or content_type == ContentType.json.value:
                 json_from_data = json.loads(data)
             else:
                 return self.app.error(f"Unsupported Content-Type: \"{content_type}\".")
@@ -300,33 +301,34 @@ class FlaskFunction:
         # Parse MCP response
         ################################################################################
         accepts = flask_request.accept_mimetypes
+        print([*accepts])
         if mcp_response is None:
             return self.app.ok(
                 None,
-                mimetype=self.CONTENT_TYPE_JSON
+                mimetype=ContentType.json.value
             )
         elif isinstance(mcp_response, JSONRPCResponse):
             return self.app.ok(
                 json.dumps(mcp_response.model_dump(exclude_none=True)),
-                mimetype=self.CONTENT_TYPE_JSON
+                mimetype=ContentType.json.value
             )
         elif isinstance(mcp_response, Dict):
             return self.app.ok(
                 json.dumps(mcp_response),
-                mimetype=self.CONTENT_TYPE_JSON
+                mimetype=ContentType.json.value
             )
         elif isinstance(mcp_response, (GeneratorType, range)):
-            if self.CONTENT_TYPE_SSE in accepts:
+            if ContentType.sse.value in accepts:
                 return self.app.ok(
                     self._sse_stream(mcp_response),
-                    mimetype=self.CONTENT_TYPE_SSE
+                    mimetype=ContentType.sse.value
                 )
             else:
                 return self.app.error(f"Unsupported Accept: \"{[*accepts]}\".")
         else:
             return self.app.ok(
                 str(mcp_response),
-                mimetype=self.CONTENT_TYPE_JSON
+                mimetype=ContentType.json.value
             )
 
     def _sse_stream(self, events: Iterable):
@@ -534,7 +536,7 @@ class FlaskServer(Flask, SSEMixIn, LifeCycleMixIn, ToolsMixIn):
             flask_fn = FlaskFunction(fn, api_info, self)
             route["flask_fn"] = flask_fn
             if method == "GET":
-                self.get(path)(flask_fn)
+                self.route(path, methods=["GET", "POST"])(flask_fn)
             elif method == "POST":
                 self.post(path)(flask_fn)
             else:
@@ -559,7 +561,7 @@ class FlaskServer(Flask, SSEMixIn, LifeCycleMixIn, ToolsMixIn):
             flask_fn = FlaskFunction(fn, api_info, self)
             route["flask_fn"] = flask_fn
             if method == "GET":
-                self.get(path)(flask_fn)
+                self.route(path, methods=["GET", "POST"])(flask_fn)
             elif method == "POST":
                 self.post(path)(flask_fn)
             else:
@@ -568,7 +570,7 @@ class FlaskServer(Flask, SSEMixIn, LifeCycleMixIn, ToolsMixIn):
     def ok(self, body: Union[str, Iterable[str], None], mimetype: str):
         return self.response_class(body, status=200, mimetype=mimetype)
 
-    def error(self, body: str, mimetype="text"):
+    def error(self, body: str, mimetype=ContentType.plain.value):
         return self.response_class(body, status=500, mimetype=mimetype)
 
     @api.get("/")
