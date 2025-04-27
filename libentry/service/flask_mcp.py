@@ -176,61 +176,6 @@ class MCPAdapter:
             # So, they should be unpacked before pass to the function.
             return self.fn(**params)
 
-    # def __call__(self, request: dict) -> Union[dict, Iterable[dict], None]:
-    #     try:
-    #         jsonrpc_version = request["jsonrpc"]
-    #     except KeyError:
-    #         raise RuntimeError("Invalid JSON-RPC specification.")
-    #
-    #     request_id = request.get("id")
-    #     if request_id is not None and not isinstance(request_id, (str, int)):
-    #         raise RuntimeError(
-    #             f"Request ID should be an integer or string. "
-    #             f"Got {type(request_id)}."
-    #         )
-    #
-    #     params = request.get("params", {})
-    #
-    #     try:
-    #         if self.input_schema is not None:
-    #             # Note that "input_schema is not None" means:
-    #             # (1) The function has only one argument;
-    #             # (2) The arguments is a BaseModel.
-    #             # In this case, the request data can be directly validated as a "BaseModel" and
-    #             # subsequently passed to the function as a single object.
-    #             pydantic_params = self.input_schema.model_validate(params)
-    #             result = self.fn(pydantic_params)
-    #         else:
-    #             # The function has multiple arguments, and the request data bundle them as a single object.
-    #             # So, they should be unpacked before pass to the function.
-    #             result = self.fn(**params)
-    #     except Exception as e:
-    #         if isinstance(e, (SystemExit, KeyboardInterrupt)):
-    #             raise e
-    #         return {
-    #             "jsonrpc": jsonrpc_version,
-    #             "id": request_id,
-    #             "error": self._make_error(e)
-    #         } if request_id is not None else None
-    #
-    #     if request_id is None:
-    #         if result is not None:
-    #             raise RuntimeError("Notification should not contain any results.")
-    #         return None
-    #     else:
-    #         if not isinstance(result, (GeneratorType, range)):
-    #             return {
-    #                 "jsonrpc": jsonrpc_version,
-    #                 "id": request_id,
-    #                 "result": result
-    #             }
-    #         else:
-    #             return (
-    #                 {"event": "message",
-    #                  "data": {"jsonrpc": jsonrpc_version, "id": request_id, "result": item}}
-    #                 for item in result
-    #             )
-
     @staticmethod
     def _make_error(e):
         err_cls = e.__class__

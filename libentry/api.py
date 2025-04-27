@@ -20,7 +20,7 @@ from typing import Any, AsyncIterable, Callable, Iterable, List, Literal, Mappin
 from urllib.parse import urlencode, urljoin
 
 import httpx
-from urllib3 import BaseHTTPResponse, PoolManager
+from urllib3 import PoolManager
 from urllib3.exceptions import HTTPError, TimeoutError
 
 from libentry import json
@@ -237,7 +237,7 @@ class BaseClient:
             verify: bool,
     ) -> Union[bytes, Iterable[bytes]]:
         headers = self.headers if headers is None else {**self.headers, **headers}
-        response: BaseHTTPResponse = self.URLLIB3_POOL[int(verify)].request(
+        response = self.URLLIB3_POOL[int(verify)].request(
             method=method,
             url=url,
             body=body,
