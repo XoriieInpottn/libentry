@@ -30,8 +30,8 @@ from typing import Any, Callable, Dict, Iterable, Optional, Type, Union
 from flask import Flask, request as flask_request
 from pydantic import BaseModel, Field, TypeAdapter
 
-from libentry import api, json, logger
-from libentry.api import APIInfo, ContentType, list_api_info
+from libentry import api_mcp as api, json, logger
+from libentry.api_mcp import APIInfo, ContentType, list_api_info
 from libentry.schema import query_api
 
 try:
