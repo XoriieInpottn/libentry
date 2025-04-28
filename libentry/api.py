@@ -3,7 +3,7 @@
 __author__ = "xi"
 __all__ = [
     "APIInfo",
-    "api",
+    "route",
     "get",
     "post",
     "list_api_info",
@@ -15,6 +15,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import partial
 from time import sleep
 from typing import Any, AsyncIterable, Callable, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 from urllib.parse import urlencode, urljoin
@@ -30,27 +31,19 @@ API_INFO = "__api_info__"
 
 @dataclass
 class APIInfo:
-    method: str = field()
     path: str = field()
-    mime_type: str = field(default="application/json")
+    methods: List[str] = field()
     chunk_delimiter: str = field(default="\n\n")
     chunk_prefix: str = field(default=None)
-    chunk_suffix: str = field(default=None)
-    stream_prefix: str = field(default=None)
-    stream_suffix: str = field(default=None)
     error_prefix: str = field(default="ERROR: ")
     extra_info: Mapping[str, Any] = field(default_factory=dict)
 
 
-def api(
-        method: Literal["GET", "POST"] = "POST",
+def route(
         path: Optional[str] = None,
-        mime_type: str = "application/json",
+        methods: List[str] = ("GET", "POST"),
         chunk_delimiter: str = "\n\n",
         chunk_prefix: str = None,
-        chunk_suffix: str = None,
-        stream_prefix: str = None,
-        stream_suffix: str = None,
         **kwargs
 ) -> Callable:
     def _api(fn: Callable):
@@ -62,14 +55,10 @@ def api(
             _path = "/" + name
 
         setattr(fn, API_INFO, APIInfo(
-            method=method,
+            methods=methods,
             path=_path,
-            mime_type=mime_type,
             chunk_delimiter=chunk_delimiter,
             chunk_prefix=chunk_prefix,
-            chunk_suffix=chunk_suffix,
-            stream_prefix=stream_prefix,
-            stream_suffix=stream_suffix,
             extra_info=kwargs
         ))
         return fn
@@ -77,50 +66,8 @@ def api(
     return _api
 
 
-def get(
-        path: Optional[str] = None,
-        mime_type: str = "application/json",
-        chunk_delimiter: str = "\n\n",
-        chunk_prefix: str = None,
-        chunk_suffix: str = None,
-        stream_prefix: str = None,
-        stream_suffix: str = None,
-        **kwargs
-) -> Callable:
-    return api(
-        method="GET",
-        path=path,
-        mime_type=mime_type,
-        chunk_delimiter=chunk_delimiter,
-        chunk_prefix=chunk_prefix,
-        chunk_suffix=chunk_suffix,
-        stream_prefix=stream_prefix,
-        stream_suffix=stream_suffix,
-        **kwargs
-    )
-
-
-def post(
-        path: Optional[str] = None,
-        mime_type: str = "application/json",
-        chunk_delimiter: str = "\n\n",
-        chunk_prefix: str = None,
-        chunk_suffix: str = None,
-        stream_prefix: str = None,
-        stream_suffix: str = None,
-        **kwargs
-) -> Callable:
-    return api(
-        method="POST",
-        path=path,
-        mime_type=mime_type,
-        chunk_delimiter=chunk_delimiter,
-        chunk_prefix=chunk_prefix,
-        chunk_suffix=chunk_suffix,
-        stream_prefix=stream_prefix,
-        stream_suffix=stream_suffix,
-        **kwargs
-    )
+get = partial(route, methods=["GET"])
+post = partial(route, methods=["POST"])
 
 
 def list_api_info(obj) -> List[Tuple[Callable, APIInfo]]:
@@ -237,7 +184,8 @@ class BaseClient:
             verify: bool,
     ) -> Union[bytes, Iterable[bytes]]:
         headers = self.headers if headers is None else {**self.headers, **headers}
-        response = self.URLLIB3_POOL[int(verify)].request(
+        client: PoolManager = self.URLLIB3_POOL[int(verify)]
+        response = client.request(
             method=method,
             url=url,
             body=body,

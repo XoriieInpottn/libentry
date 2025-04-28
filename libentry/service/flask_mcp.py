@@ -326,7 +326,7 @@ class SSEMixIn:
 
         return _stream()
 
-    @api.post("/message", skip_adapter=True)
+    @api.route("/message", skip_adapter=True)
     def message(self, request: Dict[str, Any]) -> None:
         try:
             method = request["method"]
@@ -356,11 +356,11 @@ class SSEMixIn:
 
 class LifeCycleMixIn:
 
-    @api.get()
+    @api.route()
     def live(self):
         return "OK"
 
-    @api.post()
+    @api.route()
     def initialize(self, protocolVersion: str, capabilities, clientInfo):
         return {
             "protocolVersion": "2024-11-05",
@@ -368,14 +368,14 @@ class LifeCycleMixIn:
             "serverInfo": {"name": "libentry-server", "version": "1.0.0"}
         }
 
-    @api.post("/notifications/initialized")
+    @api.route("/notifications/initialized")
     def notifications_initialized(self):
         pass
 
 
 class ToolsMixIn:
 
-    @api.get("/tools/list")
+    @api.route("/tools/list")
     def tools_list(self):
         service_routes: dict = getattr(self, "service_routes")
 
@@ -404,7 +404,7 @@ class ToolsMixIn:
                     tool_item["inputSchema"]["required"].append(field.name)
         return {"tools": tools}
 
-    @api.post("/tools/call")
+    @api.route("/tools/call")
     def tools_call(self, name: str, arguments: dict):
         path = "/" + name
         service_routes: dict = getattr(self, "service_routes")
@@ -471,27 +471,22 @@ class FlaskServer(Flask, SSEMixIn, LifeCycleMixIn, ToolsMixIn):
         for route in self.service_routes.values():
             api_info = route["api_info"]
             fn = route["fn"]
-            method = api_info.method
+            methods = api_info.methods
             path = api_info.path
             if asyncio.iscoroutinefunction(fn):
                 logger.error(f"Async function \"{fn.__name__}\" is not supported.")
                 continue
-            logger.info(f"Serving {method}-API for {path}")
+            logger.info(f"Serving {path} as {', '.join(methods)}.")
 
             flask_fn = FlaskFunction(fn, api_info, self)
             route["flask_fn"] = flask_fn
-            if method == "GET":
-                self.route(path, methods=["GET", "POST"])(flask_fn)
-            elif method == "POST":
-                self.post(path)(flask_fn)
-            else:
-                raise RuntimeError(f"Unsupported method \"{method}\" for ")
+            self.route(path, methods=methods)(flask_fn)
 
     def _init_internal_routes(self):
         for route in self.internal_routes.values():
             api_info = route["api_info"]
             fn = route["fn"]
-            method = api_info.method
+            methods = api_info.methods
             path = api_info.path
 
             if api_info.path in self.service_routes:
@@ -501,16 +496,11 @@ class FlaskServer(Flask, SSEMixIn, LifeCycleMixIn, ToolsMixIn):
             if asyncio.iscoroutinefunction(fn):
                 logger.error(f"Async function \"{fn.__name__}\" is not supported.")
                 continue
-            logger.info(f"Serving {method}-API for {path}")
+            logger.info(f"Serving {path} as {', '.join(methods)}.")
 
             flask_fn = FlaskFunction(fn, api_info, self)
             route["flask_fn"] = flask_fn
-            if method == "GET":
-                self.route(path, methods=["GET", "POST"])(flask_fn)
-            elif method == "POST":
-                self.post(path)(flask_fn)
-            else:
-                raise RuntimeError(f"Unsupported method \"{method}\" for ")
+            self.route(path, methods=methods)(flask_fn)
 
     def ok(self, body: Union[str, Iterable[str], None], mimetype: str):
         return self.response_class(body, status=200, mimetype=mimetype)
@@ -590,7 +580,7 @@ def run_service(
     if backlog is None or backlog < num_threads * 2:
         backlog = num_threads * 2
 
-    def ssl_context(config, default_ssl_context_factory):
+    def ssl_context(config, _default_ssl_context_factory):
         import ssl
         context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         context.load_cert_chain(
