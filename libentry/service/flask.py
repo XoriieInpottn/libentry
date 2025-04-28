@@ -16,7 +16,7 @@ from flask import Flask, request
 from pydantic import BaseModel, Field, create_model
 
 from libentry import api, json
-from libentry.api import APIInfo, ContentType, list_api_info
+from libentry.api import APIInfo, list_api_info
 from libentry.logging import logger
 from libentry.schema import query_api
 
@@ -49,6 +49,12 @@ class JSONDumper:
     def dump_stream(self, response: Iterable) -> Iterable[str]:
         return_value = None
 
+        if self.api_info.stream_prefix is not None:
+            yield self.api_info.stream_prefix
+
+            if self.api_info.chunk_delimiter is not None:
+                yield self.api_info.chunk_delimiter
+
         try:
             it = iter(response)
             while True:
@@ -65,6 +71,9 @@ class JSONDumper:
 
                 yield text
 
+                if self.api_info.chunk_suffix is not None:
+                    yield self.api_info.chunk_suffix
+
                 if self.api_info.chunk_delimiter is not None:
                     yield self.api_info.chunk_delimiter
         except Exception as e:
@@ -75,6 +84,12 @@ class JSONDumper:
                 yield self.api_info.error_prefix
 
             yield self.dump_error(e)
+
+            if self.api_info.chunk_delimiter is not None:
+                yield self.api_info.chunk_delimiter
+
+        if self.api_info.stream_suffix is not None:
+            yield self.api_info.stream_suffix
 
             if self.api_info.chunk_delimiter is not None:
                 yield self.api_info.chunk_delimiter
@@ -203,7 +218,7 @@ class FlaskWrapper:
                     response = [response]
                 return self.app.ok(
                     self.dumper.dump_stream(response),
-                    mimetype=ContentType.json.value
+                    mimetype=self.api_info.mime_type
                 )
             else:
                 if isinstance(response, (GeneratorType, range)):
@@ -219,18 +234,18 @@ class FlaskWrapper:
                     response = output
                 return self.app.ok(
                     self.dumper.dump(response),
-                    mimetype=ContentType.json.value
+                    mimetype=self.api_info.mime_type
                 )
         else:
             if isinstance(response, (GeneratorType, range)):
                 return self.app.ok(
                     self.dumper.dump_stream(response),
-                    mimetype=ContentType.json.value
+                    mimetype=self.api_info.mime_type
                 )
             else:
                 return self.app.ok(
                     self.dumper.dump(response),
-                    mimetype=ContentType.json.value
+                    mimetype=self.api_info.mime_type
                 )
 
 
@@ -247,18 +262,23 @@ class FlaskServer(Flask):
             return
 
         for fn, api_info in self.api_info_list:
-            methods = api_info.methods
+            method = api_info.method
             path = api_info.path
             if asyncio.iscoroutinefunction(fn):
                 logger.error(f"Async function \"{fn.__name__}\" is not supported.")
                 continue
-            logger.info(f"Serving {path} as {', '.join(methods)}.")
+            logger.info(f"Serving {method}-API for {path}")
 
             wrapped_fn = FlaskWrapper(self, fn, api_info)
-            self.route(path, methods=methods)(wrapped_fn)
+            if method == "GET":
+                self.get(path)(wrapped_fn)
+            elif method == "POST":
+                self.post(path)(wrapped_fn)
+            else:
+                raise RuntimeError(f"Unsupported method \"{method}\" for ")
 
         for fn, api_info in list_api_info(self):
-            methods = api_info.methods
+            method = api_info.method
             path = api_info.path
 
             if any(api_info.path == a.path for _, a in self.api_info_list):
@@ -268,10 +288,15 @@ class FlaskServer(Flask):
             if asyncio.iscoroutinefunction(fn):
                 logger.error(f"Async function \"{fn.__name__}\" is not supported.")
                 continue
-            logger.info(f"Serving {path} as {', '.join(methods)}.")
+            logger.info(f"Serving {method}-API for {path}")
 
             wrapped_fn = FlaskWrapper(self, fn, api_info)
-            self.route(path, methods=methods)(wrapped_fn)
+            if method == "GET":
+                self.get(path)(wrapped_fn)
+            elif method == "POST":
+                self.post(path)(wrapped_fn)
+            else:
+                raise RuntimeError(f"Unsupported method \"{method}\" for ")
 
         logger.info("Flask application initialized.")
 

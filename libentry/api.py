@@ -3,19 +3,15 @@
 __author__ = "xi"
 __all__ = [
     "APIInfo",
-    "route",
+    "api",
     "get",
     "post",
     "list_api_info",
-    "ContentType",
     "APIClient",
 ]
 
 import asyncio
-import uuid
 from dataclasses import dataclass, field
-from enum import Enum
-from functools import partial
 from time import sleep
 from typing import Any, AsyncIterable, Callable, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 from urllib.parse import urlencode, urljoin
@@ -31,19 +27,27 @@ API_INFO = "__api_info__"
 
 @dataclass
 class APIInfo:
+    method: str = field()
     path: str = field()
-    methods: List[str] = field()
+    mime_type: str = field(default="application/json")
     chunk_delimiter: str = field(default="\n\n")
     chunk_prefix: str = field(default=None)
+    chunk_suffix: str = field(default=None)
+    stream_prefix: str = field(default=None)
+    stream_suffix: str = field(default=None)
     error_prefix: str = field(default="ERROR: ")
     extra_info: Mapping[str, Any] = field(default_factory=dict)
 
 
-def route(
+def api(
+        method: Literal["GET", "POST"] = "POST",
         path: Optional[str] = None,
-        methods: List[str] = ("GET", "POST"),
+        mime_type: str = "application/json",
         chunk_delimiter: str = "\n\n",
         chunk_prefix: str = None,
+        chunk_suffix: str = None,
+        stream_prefix: str = None,
+        stream_suffix: str = None,
         **kwargs
 ) -> Callable:
     def _api(fn: Callable):
@@ -55,10 +59,14 @@ def route(
             _path = "/" + name
 
         setattr(fn, API_INFO, APIInfo(
-            methods=methods,
+            method=method,
             path=_path,
+            mime_type=mime_type,
             chunk_delimiter=chunk_delimiter,
             chunk_prefix=chunk_prefix,
+            chunk_suffix=chunk_suffix,
+            stream_prefix=stream_prefix,
+            stream_suffix=stream_suffix,
             extra_info=kwargs
         ))
         return fn
@@ -66,8 +74,50 @@ def route(
     return _api
 
 
-get = partial(route, methods=["GET"])
-post = partial(route, methods=["POST"])
+def get(
+        path: Optional[str] = None,
+        mime_type: str = "application/json",
+        chunk_delimiter: str = "\n\n",
+        chunk_prefix: str = None,
+        chunk_suffix: str = None,
+        stream_prefix: str = None,
+        stream_suffix: str = None,
+        **kwargs
+) -> Callable:
+    return api(
+        method="GET",
+        path=path,
+        mime_type=mime_type,
+        chunk_delimiter=chunk_delimiter,
+        chunk_prefix=chunk_prefix,
+        chunk_suffix=chunk_suffix,
+        stream_prefix=stream_prefix,
+        stream_suffix=stream_suffix,
+        **kwargs
+    )
+
+
+def post(
+        path: Optional[str] = None,
+        mime_type: str = "application/json",
+        chunk_delimiter: str = "\n\n",
+        chunk_prefix: str = None,
+        chunk_suffix: str = None,
+        stream_prefix: str = None,
+        stream_suffix: str = None,
+        **kwargs
+) -> Callable:
+    return api(
+        method="POST",
+        path=path,
+        mime_type=mime_type,
+        chunk_delimiter=chunk_delimiter,
+        chunk_prefix=chunk_prefix,
+        chunk_suffix=chunk_suffix,
+        stream_prefix=stream_prefix,
+        stream_suffix=stream_suffix,
+        **kwargs
+    )
 
 
 def list_api_info(obj) -> List[Tuple[Callable, APIInfo]]:
@@ -83,7 +133,7 @@ def list_api_info(obj) -> List[Tuple[Callable, APIInfo]]:
     return api_list
 
 
-def _load_json_or_str(text: str) -> Union[Mapping[str, Any], str]:
+def _load_json_or_str(text: str):
     try:
         return json.loads(text)
     except ValueError:
@@ -92,8 +142,8 @@ def _load_json_or_str(text: str) -> Union[Mapping[str, Any], str]:
 
 class ServiceError(RuntimeError):
 
-    def __init__(self, text: Union[str, Mapping[str, Any]]):
-        err = text if isinstance(text, Mapping) else _load_json_or_str(text)
+    def __init__(self, text: str):
+        err = _load_json_or_str(text)
         if isinstance(err, dict):
             if "message" in err:
                 self.message = err.get("message")
@@ -120,15 +170,6 @@ class ServiceError(RuntimeError):
 
 
 ErrorCallback = Callable[[Exception], None]
-
-
-class ContentType(Enum):
-    plain = "text/plain"
-    form = "application/x-www-form-urlencoded"
-    html = "text/html"
-    xml = "application/xml"
-    json = "application/json"
-    sse = "text/event-stream"
 
 
 class BaseClient:
@@ -184,8 +225,7 @@ class BaseClient:
             verify: bool,
     ) -> Union[bytes, Iterable[bytes]]:
         headers = self.headers if headers is None else {**self.headers, **headers}
-        client: PoolManager = self.URLLIB3_POOL[int(verify)]
-        response = client.request(
+        response = self.URLLIB3_POOL[int(verify)].request(
             method=method,
             url=url,
             body=body,
@@ -477,13 +517,7 @@ class APIClient(BaseClient):
             num_trials: int = 5,
             interval: float = 1,
             retry_factor: float = 0.5,
-            on_error: Optional[ErrorCallback] = None,
-            stream: bool = False,
-            chunk_delimiter: str = "\n\n",
-            chunk_prefix: str = None,
-            chunk_suffix: str = None,
-            error_prefix: str = "ERROR: ",
-            exhaust_stream: bool = False,
+            on_error: Optional[ErrorCallback] = None
     ):
         return self.request(
             "GET",
@@ -494,12 +528,6 @@ class APIClient(BaseClient):
             interval=interval,
             retry_factor=retry_factor,
             on_error=on_error,
-            stream=stream,
-            chunk_delimiter=chunk_delimiter,
-            chunk_prefix=chunk_prefix,
-            chunk_suffix=chunk_suffix,
-            error_prefix=error_prefix,
-            exhaust_stream=exhaust_stream,
         )
 
     def post(
@@ -537,45 +565,6 @@ class APIClient(BaseClient):
             error_prefix=error_prefix,
             exhaust_stream=exhaust_stream,
         )
-
-    def call(
-            self,
-            name: str,
-            params: Optional[Mapping[str, Any]] = None,
-            timeout: float = 15,
-            num_trials: int = 5,
-            interval: float = 1,
-            retry_factor: float = 0.5,
-            on_error: Optional[ErrorCallback] = None,
-    ) -> Any:
-        request_id = str(uuid.uuid4())
-        request = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": name,
-        }
-        if params is not None:
-            request["params"] = params
-        accepts = [ContentType.plain.value, ContentType.json.value, ContentType.sse.value]
-        response = self.request(
-            "POST",
-            "/" + name,
-            headers={"Accept": ",".join(accepts)},
-            json_data=request,
-            timeout=timeout,
-            num_trials=num_trials,
-            interval=interval,
-            retry_factor=retry_factor,
-            on_error=on_error
-        )
-        assert isinstance(response, Mapping)
-        if "error" in response:
-            error = response["error"]
-            raise ServiceError(error["data"])
-        elif "result" in response:
-            return response["result"]
-        else:
-            raise ServiceError("The response doesn't contain any result.")
 
     async def request_async(
             self,
@@ -623,7 +612,6 @@ class APIClient(BaseClient):
             verify=verify,
         )
         if not stream:
-            assert isinstance(content, bytes)
             return _load_json_or_str(content.decode(self.charset))
         else:
             async def iter_lines(data_list: AsyncIterable[bytes]) -> AsyncIterable[str]:
@@ -737,13 +725,3 @@ class APIClient(BaseClient):
             error_prefix=error_prefix,
             exhaust_stream=exhaust_stream,
         )
-
-
-class SSESession:
-
-    def __init__(self, client: APIClient):
-        self.client = client
-        self.client.get("/sse", stream=True)
-
-    def initialize(self):
-        pass
