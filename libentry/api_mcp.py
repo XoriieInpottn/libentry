@@ -19,7 +19,7 @@ from functools import partial
 from threading import Lock, Thread
 from time import sleep
 from types import GeneratorType
-from typing import Any, AsyncIterable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 from urllib.parse import urlencode, urljoin
 
 import httpx
@@ -129,9 +129,168 @@ class ContentType(Enum):
     plain = "text/plain"
     form = "application/x-www-form-urlencoded"
     html = "text/html"
+    # object type
     xml = "application/xml"
     json = "application/json"
+    # stream type
+    octet_stream = "application/octet-stream"
+    json_stream = " application/json-stream"
     sse = "text/event-stream"
+
+
+class HTTPRequest(BaseModel):
+    url: str
+    method: str
+    headers: Mapping[str, str] = {}
+    payload: Optional[Union[bytes, str]] = None
+    timeout: float = 15
+    num_trials: int = 5
+    interval: float = 1
+    retry_factor: float = 0.5
+    on_error: Optional[Callable[[Exception], None]] = None
+    stream: Optional[bool] = None
+    verify: Optional[bool] = None
+
+
+class HTTPResponse(BaseModel):
+    status: int
+    headers: Mapping[str, str] = {}
+    content: Optional[Any]
+
+
+class HTTPClient:
+
+    def __init__(
+            self,
+            base_url: Optional[str] = None,
+            headers: Optional[Mapping[str, str]] = None,
+            content_type: str = f"{ContentType.plain}",
+            accept: str = f"{ContentType.plain}",
+            user_agent: str = "libentry.api_mcp.APIClient",
+            connection: str = "close",
+            api_key: Optional[str] = None,
+            verify=False,
+            stream_read_size: int = 512
+    ) -> None:
+        self.base_url = base_url
+
+        self.headers = {} if headers is None else {**headers}
+        self.headers["Content-Type"] = content_type
+        self.headers["Accept"] = accept
+        self.headers["User-Agent"] = user_agent
+        self.headers["Connection"] = connection
+
+        if api_key is not None:
+            self.headers["Authorization"] = f"Bearer {api_key}"
+
+        self.verify = verify
+        self.stream_read_size = stream_read_size
+
+    DEFAULT_CONN_POOL_SIZE = 10
+    URLLIB3_POOL = (
+        PoolManager(DEFAULT_CONN_POOL_SIZE, cert_reqs='CERT_NONE'),
+        PoolManager(DEFAULT_CONN_POOL_SIZE)
+    )
+
+    @classmethod
+    def reset_connection_pool(cls, size: int = 10):
+        cls.URLLIB3_POOL = (
+            PoolManager(size, cert_reqs='CERT_NONE'),
+            PoolManager(size)
+        )
+
+    def request(self, request: HTTPRequest) -> HTTPResponse:
+        err = None
+        for i in range(request.num_trials):
+            timeout = request.timeout * (1 + i * request.retry_factor)
+            try:
+                return self._single_request(request, timeout=timeout)
+            except TimeoutError as e:
+                err = e
+                if callable(request.on_error):
+                    request.on_error(e)
+            except HTTPError as e:
+                err = e
+                if callable(request.on_error):
+                    request.on_error(e)
+            sleep(request.interval)
+        raise err
+
+    def _single_request(self, request: HTTPRequest, timeout: float) -> HTTPResponse:
+        headers = {**self.headers, **request.headers}
+        verify = self.verify if request.verify is None else request.verify
+        client: PoolManager = self.URLLIB3_POOL[int(verify)]
+        response = client.request(
+            method=request.method,
+            url=request.url,
+            body=request.payload,
+            headers=headers,
+            timeout=timeout,
+            preload_content=False
+        )
+
+        if response.status != 200:
+            _, params = self.find_content_type(headers)
+            charset = params.get("charset", "utf-8")
+            try:
+                raise ServiceError(response.data.decode(charset))
+            finally:
+                response.release_conn()
+
+        headers = {**response.headers}
+        content_type = headers.get("Content-Type", ContentType.plain.value)
+
+        need_stream = "stream" in content_type or response.chunked
+        stream = request.stream if request.stream is not None else need_stream
+
+        if not stream:
+            try:
+                return HTTPResponse(
+                    status=response.status,
+                    headers=headers,
+                    content=response.data
+                )
+            finally:
+                response.release_conn()
+        else:
+            def iter_bytes() -> Iterable[bytes]:
+                try:
+                    if hasattr(response, "stream"):
+                        yield from response.stream(self.stream_read_size)
+                    else:
+                        while True:
+                            data = response.read(self.stream_read_size)
+                            if not data:
+                                break
+                            yield data
+                finally:
+                    response.release_conn()
+
+            return HTTPResponse(
+                status=response.status,
+                headers=headers,
+                content=iter_bytes()
+            )
+
+    def find_content_type(self, headers: Optional[Mapping[str, str]]) -> Tuple[Optional[str], Mapping[str, str]]:
+        if headers is not None and "Content-Type" in headers:
+            content_type = headers["Content-Type"]
+        else:
+            content_type = self.headers.get("Content-Type")
+
+        if content_type is None:
+            return None, {}
+
+        items = content_type.split(";")
+        mime = items[0].strip()
+        params = {}
+        for item in items[1:]:
+            item = item.strip()
+            i = item.find("=")
+            if i < 0:
+                continue
+            params[item[:i]] = item[i + 1:]
+        return mime, params
 
 
 class BaseClient:
@@ -361,68 +520,6 @@ class BaseClient:
         raise err
 
 
-class SSEStream:
-
-    def __init__(self, delimiter, charset):
-        self.delimiter = delimiter.encode(charset) if delimiter is not None else None
-        self.charset = charset
-
-    def iter_chunks(self, data_list: Iterable[bytes]) -> Iterable[str]:
-        pending = None
-        for data in data_list:
-            if pending is not None:
-                data = pending + data
-
-            chunks = data.split(self.delimiter) if self.delimiter else data.splitlines()
-            pending = chunks.pop() if chunks and chunks[-1] and chunks[-1][-1] == data[-1] else None
-
-            for chunk in chunks:
-                yield chunk.decode(self.charset)
-
-        if pending is not None:
-            yield pending.decode(self.charset)
-
-    def iter_events(self, chunks: Iterable[str]):
-        error = None
-        for chunk in chunks:
-            if error is not None:
-                # error is not None means there is a fatal exception raised from the server side.
-                # The client should just complete the stream and then raise the error to the upper.
-                continue
-
-            if not chunk:
-                continue
-
-            decoded = self._decode_chunk(chunk)
-            if decoded["event"] == "message":
-                try:
-                    decoded["data"] = json.loads(decoded["data"])
-                except ValueError:
-                    pass
-            yield decoded
-
-        if error is not None:
-            raise error
-
-    def _decode_chunk(self, chunk: str) -> Dict[str, str]:
-        lines = chunk.strip().split("\n")
-        if len(lines) == 2:
-            event_line, data_line = lines
-            if not (event_line.startswith("event:") and data_line.startswith("data:")):
-                raise RuntimeError(f"Failed to decode chunk: \"{chunk}\".")
-            return {"event": event_line[len("event:"):], "data": data_line[len("data:"):]}
-        elif len(lines) == 1:
-            line = lines[0]
-            if line.startswith("event:"):
-                return {"event": line[len("event:"):]}
-            elif line.startswith("data:"):
-                return {"event": "message", "data": line[len("data:"):]}
-            else:
-                return {"event": "message", "data": line}
-        else:
-            raise RuntimeError(f"Failed to decode chunk: \"{chunk}\".")
-
-
 class JSONRPCError(BaseModel):
     code: int = Field(default=0)
     message: str = Field()
@@ -444,22 +541,104 @@ class JSONRPCNotification(BaseModel):
 
 class SSEEvent(BaseModel):
     event: str = Field()
-    data: Any = Field()
+    data: Optional[Any] = Field(default=None)
 
 
-class APIClient(BaseClient):
+class ChunkStream:
+
+    def __init__(self, delimiter, charset):
+        self.delimiter = delimiter.encode(charset) if delimiter is not None else None
+        self.charset = charset
+
+    def __call__(self, stream: Iterable[bytes]) -> Iterable[str]:
+        pending: Optional[bytes] = None
+        for data in stream:
+            if pending is not None:
+                data = pending + data
+
+            chunks = data.split(self.delimiter) if self.delimiter else data.splitlines()
+            pending = chunks.pop() if chunks and chunks[-1] and chunks[-1][-1] == data[-1] else None
+
+            for chunk in chunks:
+                yield chunk.decode(self.charset)
+
+        if pending is not None:
+            yield pending.decode(self.charset)
+
+
+class SSEStream:
+
+    def __init__(self, delimiter, charset):
+        self.chunk_stream = ChunkStream(delimiter, charset)
+
+    def __call__(self, stream: Iterable[bytes]):
+        for chunk in self.chunk_stream(stream):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+
+            yield self._decode_chunk(chunk)
+
+    def _decode_chunk(self, chunk: str) -> SSEEvent:
+        lines = chunk.strip().split("\n")
+        if len(lines) == 2:
+            event_line, data_line = lines
+            if not (event_line.startswith("event:") and data_line.startswith("data:")):
+                raise RuntimeError(f"Failed to decode chunk: \"{chunk}\".")
+            event = event_line[len("event:"):]
+            data = data_line[len("data:"):]
+        elif len(lines) == 1:
+            line = lines[0]
+            if line.startswith("event:"):
+                event = line[len("event:"):]
+                data = None
+            elif line.startswith("data:"):
+                event = "message"
+                data = line[len("data:"):]
+            else:
+                event = "message"
+                data = line
+        else:
+            raise RuntimeError(f"Failed to decode chunk: \"{chunk}\".")
+
+        return SSEEvent(event=event, data=data)
+
+
+class APIClient:
+
+    def __init__(
+            self,
+            base_url: Optional[str] = None,
+            headers: Optional[Mapping[str, str]] = None,
+            content_type: str = ContentType.json.value,
+            accept: str = f"{ContentType.json},{ContentType.sse}",
+            user_agent: str = "libentry.api_mcp.APIClient",
+            connection: str = "close",
+            api_key: Optional[str] = None,
+            verify=False,
+            stream_read_size: int = 512
+    ) -> None:
+        self.http_client = HTTPClient(
+            base_url=base_url,
+            headers=headers,
+            content_type=content_type,
+            accept=accept,
+            user_agent=user_agent,
+            connection=connection,
+            api_key=api_key,
+            verify=verify,
+            stream_read_size=stream_read_size,
+        )
 
     @staticmethod
-    def _encode_params(data):
+    def x_www_form_urlencoded(json_data: Mapping[str, Any]):
         result = []
-        for k, v in data.items():
+        for k, v in json_data.items():
             if v is not None:
-                result.append(
-                    (
-                        k.encode("utf-8") if isinstance(k, str) else k,
-                        v.encode("utf-8") if isinstance(v, str) else v,
-                    )
-                )
+                result.append((
+                    k.encode("utf-8") if isinstance(k, str) else k,
+                    v.encode("utf-8") if isinstance(v, str) else v,
+                ))
         return urlencode(result, doseq=True)
 
     def request(
@@ -475,105 +654,108 @@ class APIClient(BaseClient):
             retry_factor: float = 0.5,
             on_error: Optional[ErrorCallback] = None,
             stream: Optional[bool] = None,
-            chunk_delimiter: str = "\n\n",
+            stream_delimiter: Optional[str] = None,
             verify: Optional[bool] = None,
     ):
-        full_url = urljoin(self.base_url, path)
-        headers = {**headers} if headers else {}
-        content_type = headers.get("Content-Type", self.headers.get("Content-Type"))
-        if content_type is None or content_type == ContentType.json.value:
-            body = json.dumps(json_data) if json_data is not None else None
-        elif content_type == ContentType.form.value:
-            body = self._encode_params(json_data)
-            headers["Content-Type"] = ContentType.json.value
+        full_url = urljoin(self.http_client.base_url, path)
+        req_mime, _ = self.http_client.find_content_type(headers)
+        if (req_mime is None) or req_mime in {ContentType.json.value, ContentType.plain.value}:
+            payload = json.dumps(json_data) if json_data is not None else None
+        elif req_mime == ContentType.form.value:
+            payload = self.x_www_form_urlencoded(json_data) if json_data is not None else None
         else:
-            raise ValueError(f"Unsupported content type \"{content_type}\".")
+            raise ValueError(f"Unsupported request MIME: \"{req_mime}\".")
 
-        content = super().request(
-            method,
-            full_url,
-            body=body,
+        response = self.http_client.request(HTTPRequest(
+            url=full_url,
+            method=method,
             headers=headers,
+            payload=payload,
             timeout=timeout,
-            num_trials=num_trials,
             interval=interval,
+            num_trials=num_trials,
             retry_factor=retry_factor,
             on_error=on_error,
             stream=stream,
-            verify=verify,
-        )
+            verify=verify
+        ))
 
+        content = response.content
+        resp_mime, resp_params = self.http_client.find_content_type(response.headers)
+        resp_charset = resp_params.get("charset", "utf-8")
         if not isinstance(content, GeneratorType):
-            return _load_json_or_str(content.decode(self.charset))
+            if not isinstance(content, bytes):
+                raise ServiceError(
+                    f"Content type missmatch, "
+                    f"expected bytes, got {type(content)}."
+                )
+            content = content.decode(resp_charset)
+            if resp_mime is None or resp_mime == ContentType.plain.value:
+                return content
+            elif resp_mime == ContentType.json.value:
+                return _load_json_or_str(content)
+            else:
+                raise RuntimeError(f"Unsupported response MIME: \"{resp_mime}\".")
         else:
-            sse = SSEStream(chunk_delimiter, self.charset)
-            return sse.iter_events(sse.iter_chunks(content))
+            if resp_mime is None or resp_mime == ContentType.sse.value:
+                if stream_delimiter is None:
+                    stream_delimiter = "\n\n"
+                chunks = self.iter_chunks(content, stream_delimiter)
+                return self.iter_events(chunks, resp_charset)
+            else:
+                raise RuntimeError(f"Unsupported response MIME: \"{resp_mime}\".")
 
-    def get(
-            self,
-            path: Optional[str] = None,
-            *,
-            headers: Optional[Mapping[str, str]] = None,
-            timeout: float = 15,
-            num_trials: int = 5,
-            interval: float = 1,
-            retry_factor: float = 0.5,
-            on_error: Optional[ErrorCallback] = None,
-            stream: bool = False,
-            chunk_delimiter: str = "\n\n",
-            chunk_prefix: str = None,
-            chunk_suffix: str = None,
-            error_prefix: str = "ERROR: ",
-    ):
-        return self.request(
-            "GET",
-            path,
-            headers=headers,
-            timeout=timeout,
-            num_trials=num_trials,
-            interval=interval,
-            retry_factor=retry_factor,
-            on_error=on_error,
-            stream=stream,
-            chunk_delimiter=chunk_delimiter,
-            chunk_prefix=chunk_prefix,
-            chunk_suffix=chunk_suffix,
-            error_prefix=error_prefix,
-        )
+    @staticmethod
+    def iter_chunks(bytes_stream: Iterable[bytes], delimiter: Union[bytes, str]) -> Iterable[bytes]:
+        if isinstance(delimiter, str):
+            delimiter = delimiter.encode()
 
-    def post(
-            self,
-            path: Optional[str] = None,
-            json_data: Optional[Mapping] = None,
-            *,
-            headers: Optional[Mapping[str, str]] = None,
-            timeout: float = 15,
-            num_trials: int = 5,
-            interval: float = 1,
-            retry_factor: float = 0.5,
-            on_error: Optional[ErrorCallback] = None,
-            stream: bool = False,
-            chunk_delimiter: str = "\n\n",
-            chunk_prefix: str = None,
-            chunk_suffix: str = None,
-            error_prefix: str = "ERROR: ",
-    ):
-        return self.request(
-            "POST",
-            path,
-            json_data=json_data,
-            headers=headers,
-            timeout=timeout,
-            num_trials=num_trials,
-            interval=interval,
-            retry_factor=retry_factor,
-            on_error=on_error,
-            stream=stream,
-            chunk_delimiter=chunk_delimiter,
-            chunk_prefix=chunk_prefix,
-            chunk_suffix=chunk_suffix,
-            error_prefix=error_prefix,
-        )
+        pending: Optional[bytes] = None
+        for data in bytes_stream:
+            if pending is not None:
+                data = pending + data
+
+            chunks = data.split(delimiter)
+            pending = chunks.pop() if chunks and chunks[-1] and chunks[-1][-1] == data[-1] else None
+
+            for chunk in chunks:
+                yield chunk
+
+        if pending is not None:
+            yield pending
+
+    @staticmethod
+    def iter_events(chunks: Iterable[bytes], charset: str) -> Iterable[SSEEvent]:
+        d = "\n"
+        ep = "event:"
+        dp = "data:"
+        for chunk in chunks:
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+
+            lines = chunk.decode(charset).split(d)
+            if len(lines) == 2:
+                event_line, data_line = lines
+                if not (event_line.startswith(ep) and data_line.startswith(dp)):
+                    raise RuntimeError(f"Failed to decode chunk: \"{chunk}\".")
+                event = event_line[len(ep):]
+                data = data_line[len(dp):]
+            elif len(lines) == 1:
+                line = lines[0]
+                if line.startswith(ep):
+                    event = line[len(ep):]
+                    data = None
+                elif line.startswith(dp):
+                    event = "message"
+                    data = line[len(dp):]
+                else:
+                    event = "message"
+                    data = line
+            else:
+                raise RuntimeError(f"Failed to decode chunk: \"{chunk}\".")
+
+            yield SSEEvent(event=event, data=data)
 
     def call(
             self,
@@ -617,180 +799,24 @@ class APIClient(BaseClient):
             else:
                 raise ServiceError("The response doesn't contain any result.")
         else:
-            def _stream():
-                for item in response:
-                    event = SSEEvent.model_validate(item)
-                    if event.event != "message" or event.data is None:
-                        continue
+            return self.iter_results(response)
 
-                    resp = JSONRPCResponse.model_validate(event.data)
-                    if resp.error is not None:
-                        raise ServiceError(resp.error.data)
-                    if resp.result is not None:
-                        yield resp.result
-                    else:
-                        raise ServiceError("The response doesn't contain any result.")
+    @staticmethod
+    def iter_results(response: Iterable[SSEEvent]):
+        for sse in response:
+            if not isinstance(sse, SSEEvent):
+                raise ServiceError("Not a valid event stream.")
 
-            return _stream()
+            if sse.event != "message" or sse.data is None:
+                continue
 
-    async def request_async(
-            self,
-            method: Literal["GET", "POST"],
-            path: str,
-            json_data: Optional[Mapping] = None,
-            *,
-            headers: Optional[Mapping[str, str]] = None,
-            timeout: float = 15,
-            num_trials: int = 5,
-            interval: float = 1,
-            retry_factor: float = 0.5,
-            on_error: Optional[ErrorCallback] = None,
-            stream: bool = False,
-            chunk_delimiter: str = "\n\n",
-            chunk_prefix: str = None,
-            chunk_suffix: str = None,
-            error_prefix: str = "ERROR: ",
-            exhaust_stream: bool = False,
-            verify: Optional[bool] = None,
-    ):
-        full_url = urljoin(self.base_url, path)
-        headers = {**headers} if headers else {}
-        content_type = headers.get("Content-Type", self.headers.get("Content-Type"))
-        if content_type is None or content_type == "application/json":
-            body = json.dumps(json_data) if json_data is not None else None
-        elif content_type == "application/x-www-form-urlencoded":
-            body = self._encode_params(json_data)
-        else:
-            raise ValueError(f"Unsupported content type \"{content_type}\".")
-
-        content = await super().request_async(
-            method,
-            full_url,
-            body=body,
-            headers=headers,
-            timeout=timeout,
-            num_trials=num_trials,
-            interval=interval,
-            retry_factor=retry_factor,
-            on_error=on_error,
-            stream=stream,
-            verify=verify,
-        )
-        if not stream:
-            assert isinstance(content, bytes)
-            return _load_json_or_str(content.decode(self.charset))
-        else:
-            async def iter_lines(data_list: AsyncIterable[bytes]) -> AsyncIterable[str]:
-                delimiter = chunk_delimiter.encode(self.charset) if chunk_delimiter is not None else None
-                pending = None
-                async for data in data_list:
-                    if pending is not None:
-                        data = pending + data
-
-                    lines = data.split(delimiter) if delimiter else data.splitlines()
-                    pending = lines.pop() if lines and lines[-1] and lines[-1][-1] == data[-1] else None
-
-                    for line in lines:
-                        yield line.decode(self.charset)
-
-                if pending is not None:
-                    yield pending.decode(self.charset)
-
-            async def iter_chunks(lines: AsyncIterable[str]) -> AsyncIterable:
-                error = None
-                async for chunk in lines:
-                    if error is not None:
-                        # error is not None means there is a fatal exception raised from the server side.
-                        # The client should just complete the stream and then raise the error to the upper.
-                        continue
-
-                    if not chunk:
-                        continue
-
-                    if error_prefix is not None:
-                        if chunk.startswith(error_prefix):
-                            chunk = chunk[len(error_prefix):]
-                            error = ServiceError(chunk)
-                            continue
-
-                    if chunk_prefix is not None:
-                        if chunk.startswith(chunk_prefix):
-                            chunk = chunk[len(chunk_prefix):]
-                        else:
-                            continue
-
-                    if chunk_suffix is not None:
-                        if chunk.endswith(chunk_suffix):
-                            chunk = chunk[:-len(chunk_suffix)]
-                        else:
-                            continue
-
-                    yield _load_json_or_str(chunk)
-
-                if error is not None:
-                    raise error
-
-            gen = iter_lines(content)
-            gen = iter_chunks(gen)
-            return gen if not exhaust_stream else [*gen]
-
-    async def get_async(
-            self,
-            path: Optional[str] = None,
-            *,
-            headers: Optional[Mapping[str, str]] = None,
-            timeout: float = 15,
-            num_trials: int = 5,
-            interval: float = 1,
-            retry_factor: float = 0.5,
-            on_error: Optional[ErrorCallback] = None
-    ):
-        return await self.request_async(
-            "GET",
-            path,
-            headers=headers,
-            timeout=timeout,
-            num_trials=num_trials,
-            interval=interval,
-            retry_factor=retry_factor,
-            on_error=on_error,
-        )
-
-    async def post_async(
-            self,
-            path: Optional[str] = None,
-            json_data: Optional[Mapping] = None,
-            *,
-            headers: Optional[Mapping[str, str]] = None,
-            timeout: float = 15,
-            num_trials: int = 5,
-            interval: float = 1,
-            retry_factor: float = 0.5,
-            on_error: Optional[ErrorCallback] = None,
-            stream: bool = False,
-            chunk_delimiter: str = "\n\n",
-            chunk_prefix: str = None,
-            chunk_suffix: str = None,
-            error_prefix: str = "ERROR: ",
-            exhaust_stream: bool = False,
-    ):
-        return await self.request_async(
-            "POST",
-            path,
-            json_data=json_data,
-            headers=headers,
-            timeout=timeout,
-            num_trials=num_trials,
-            interval=interval,
-            retry_factor=retry_factor,
-            on_error=on_error,
-            stream=stream,
-            chunk_delimiter=chunk_delimiter,
-            chunk_prefix=chunk_prefix,
-            chunk_suffix=chunk_suffix,
-            error_prefix=error_prefix,
-            exhaust_stream=exhaust_stream,
-        )
+            resp = JSONRPCResponse.model_validate(json.loads(sse.data))
+            if resp.error is not None:
+                raise ServiceError(resp.error.data)
+            if resp.result is not None:
+                yield resp.result
+            else:
+                raise ServiceError("The response doesn't contain any result.")
 
     def start_session(self):
         return SSESession(self)
