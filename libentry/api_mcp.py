@@ -8,22 +8,28 @@ __all__ = [
     "post",
     "list_api_info",
     "ContentType",
+    "JSONRPCRequest",
+    "JSONRPCError",
+    "JSONRPCResponse",
+    "JSONRPCNotification",
+    "SSEEvent",
     "APIClient",
 ]
 
-import asyncio
+import re
+import traceback
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import partial
-from threading import Lock, Thread
+from queue import Queue
+from threading import Semaphore, Thread
 from time import sleep
 from types import GeneratorType
 from typing import Any, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 from urllib.parse import urlencode, urljoin
 
-import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 from urllib3 import PoolManager
 from urllib3.exceptions import HTTPError, TimeoutError
 
@@ -86,17 +92,14 @@ def list_api_info(obj) -> List[Tuple[Callable, APIInfo]]:
     return api_list
 
 
-def _load_json_or_str(text: str) -> Union[Mapping[str, Any], str]:
-    try:
-        return json.loads(text)
-    except ValueError:
-        return text
-
-
 class ServiceError(RuntimeError):
 
-    def __init__(self, text: Union[str, Mapping[str, Any]]):
-        err = text if isinstance(text, Mapping) else _load_json_or_str(text)
+    def __init__(self, err: Union[str, Mapping[str, Any]]):
+        try:
+            err = json.loads(err)
+        except ValueError:
+            pass
+
         if isinstance(err, dict):
             if "message" in err:
                 self.message = err.get("message")
@@ -120,9 +123,6 @@ class ServiceError(RuntimeError):
         if self.traceback:
             lines += ["Below is the stacktrace:\n", self.traceback.rstrip()]
         return "".join(lines)
-
-
-ErrorCallback = Callable[[Exception], None]
 
 
 class ContentType(Enum):
@@ -164,8 +164,8 @@ class HTTPClient:
             self,
             base_url: Optional[str] = None,
             headers: Optional[Mapping[str, str]] = None,
-            content_type: str = f"{ContentType.plain}",
-            accept: str = f"{ContentType.plain}",
+            content_type: str = ContentType.plain.value,
+            accept: str = ContentType.plain.value,
             user_agent: str = "libentry.api_mcp.APIClient",
             connection: str = "close",
             api_key: Optional[str] = None,
@@ -229,13 +229,10 @@ class HTTPClient:
             preload_content=False
         )
 
-        if response.status != 200:
+        if response.status // 100 != 2:
             _, params = self.find_content_type(headers)
             charset = params.get("charset", "utf-8")
-            try:
-                raise ServiceError(response.data.decode(charset))
-            finally:
-                response.release_conn()
+            raise ServiceError(self._load_bytes(response).decode(charset))
 
         headers = {**response.headers}
         content_type = headers.get("Content-Type", ContentType.plain.value)
@@ -244,39 +241,49 @@ class HTTPClient:
         stream = request.stream if request.stream is not None else need_stream
 
         if not stream:
-            try:
-                return HTTPResponse(
-                    status=response.status,
-                    headers=headers,
-                    content=response.data
-                )
-            finally:
-                response.release_conn()
-        else:
-            def iter_bytes() -> Iterable[bytes]:
-                try:
-                    if hasattr(response, "stream"):
-                        yield from response.stream(self.stream_read_size)
-                    else:
-                        while True:
-                            data = response.read(self.stream_read_size)
-                            if not data:
-                                break
-                            yield data
-                finally:
-                    response.release_conn()
-
             return HTTPResponse(
                 status=response.status,
                 headers=headers,
-                content=iter_bytes()
+                content=self._load_bytes(response)
+            )
+        else:
+            return HTTPResponse(
+                status=response.status,
+                headers=headers,
+                content=self._iter_bytes(response, self.stream_read_size)
             )
 
-    def find_content_type(self, headers: Optional[Mapping[str, str]]) -> Tuple[Optional[str], Mapping[str, str]]:
-        if headers is not None and "Content-Type" in headers:
-            content_type = headers["Content-Type"]
-        else:
-            content_type = self.headers.get("Content-Type")
+    @staticmethod
+    def _load_bytes(response) -> bytes:
+        try:
+            return response.data
+        finally:
+            response.release_conn()
+
+    @staticmethod
+    def _iter_bytes(response, read_size) -> Iterable[bytes]:
+        try:
+            if hasattr(response, "stream"):
+                yield from response.stream(read_size)
+            else:
+                while True:
+                    data = response.read(read_size)
+                    if not data:
+                        break
+                    yield data
+        finally:
+            response.release_conn()
+
+    @staticmethod
+    def find_content_type(*headers: Optional[Mapping[str, str]]) -> Tuple[Optional[str], Mapping[str, str]]:
+        content_type = None
+        for h in headers:
+            if h is None:
+                continue
+            try:
+                content_type = h["Content-Type"]
+            except KeyError:
+                continue
 
         if content_type is None:
             return None, {}
@@ -293,237 +300,34 @@ class HTTPClient:
         return mime, params
 
 
-class BaseClient:
-
-    def __init__(
-            self,
-            base_url: Optional[str] = None,
-            api_key: Optional[str] = None,
-            content_type: str = ContentType.json.value,
-            accept: str = f"{ContentType.plain},{ContentType.json},{ContentType.sse}",
-            user_agent: str = "libentry.api_mcp.APIClient",
-            connection: str = "close",
-            headers: Optional[Mapping[str, str]] = None,
-            verify=False,
-            stream_read_size: int = 512,
-            charset: str = "UTF-8",
-    ) -> None:
-        self.base_url = base_url
-        self.headers = {
-            "Accept": accept,
-            "Content-Type": content_type,
-            "User-Agent": user_agent,
-            "Connection": connection,
-        }
-
-        if headers is not None:
-            self.headers.update(headers)
-
-        if api_key is not None:
-            self.headers["Authorization"] = f"Bearer {api_key}"
-
-        self.verify = verify
-        self.stream_read_size = stream_read_size
-        self.charset = charset
-
-    DEFAULT_CONN_POOL_SIZE = 10
-    URLLIB3_POOL = (
-        PoolManager(DEFAULT_CONN_POOL_SIZE, cert_reqs='CERT_NONE'),
-        PoolManager(DEFAULT_CONN_POOL_SIZE)
-    )
-
-    @classmethod
-    def reset_connection_pool(cls, size: int = 10):
-        cls.URLLIB3_POOL = (
-            PoolManager(size, cert_reqs='CERT_NONE'),
-            PoolManager(size)
-        )
-
-    def _single_request(
-            self,
-            method: str,
-            url: str,
-            body: Optional[Union[bytes, str]],
-            headers: Optional[Mapping[str, str]],
-            timeout: float,
-            stream: Optional[bool],
-            verify: bool,
-    ):
-        headers = self.headers if headers is None else {**self.headers, **headers}
-        client: PoolManager = self.URLLIB3_POOL[int(verify)]
-        response = client.request(
-            method=method,
-            url=url,
-            body=body,
-            headers=headers,
-            timeout=timeout,
-            preload_content=False
-        )
-
-        if response.status != 200:
-            try:
-                raise ServiceError(response.data.decode(self.charset))
-            finally:
-                response.release_conn()
-
-        if stream is None:
-            stream = "stream" in response.headers.get("Content-Type") or response.chunked
-
-        if not stream:
-            try:
-                return response.data
-            finally:
-                response.release_conn()
-        else:
-            def iter_content():
-                try:
-                    if hasattr(response, "stream"):
-                        yield from response.stream(self.stream_read_size, decode_content=True)
-                    else:
-                        while True:
-                            data = response.read(self.stream_read_size)
-                            if not data:
-                                break
-                            yield data
-                finally:
-                    response.release_conn()
-
-            return iter_content()
-
-    def request(
-            self,
-            method: Literal["GET", "POST"],
-            url: str,
-            body: Optional[Union[bytes, str]] = None,
-            headers: Optional[Mapping[str, str]] = None,
-            timeout: float = 15,
-            num_trials: int = 5,
-            interval: float = 1,
-            retry_factor: float = 0.5,
-            on_error: Optional[ErrorCallback] = None,
-            stream: Optional[bool] = None,
-            verify: Optional[bool] = None,
-    ) -> Union[bytes, Iterable[bytes]]:
-        headers = self.headers if headers is None else headers
-        verify = self.verify if verify is None else verify
-
-        err = None
-        for i in range(num_trials):
-            try:
-                return self._single_request(
-                    method=method,
-                    url=url,
-                    body=body,
-                    headers=headers,
-                    timeout=timeout * (1 + i * retry_factor),
-                    stream=stream,
-                    verify=verify,
-                )
-            except TimeoutError as e:
-                err = e
-                if callable(on_error):
-                    on_error(e)
-            except HTTPError as e:
-                err = e
-                if callable(on_error):
-                    on_error(e)
-            sleep(interval)
-        raise err
-
-    HTTPX_POOL = httpx.Limits(max_keepalive_connections=DEFAULT_CONN_POOL_SIZE)
-
-    async def _single_request_async(
-            self,
-            method: str,
-            url: str,
-            body: Optional[Union[bytes, str]],
-            headers: Optional[Mapping[str, str]],
-            timeout: float,
-            stream: bool,
-            verify: bool,
-    ):
-        headers = self.headers if headers is None else {**self.headers, **headers}
-        if not stream:
-            async with httpx.AsyncClient(headers=headers, verify=verify) as client:
-                response = await client.request(
-                    method=method,
-                    url=url,
-                    content=body,
-                    timeout=timeout
-                )
-                try:
-                    if response.status_code != 200:
-                        raise ServiceError(response.content.decode(self.charset))
-                    return response.content
-                finally:
-                    await response.aclose()
-        else:
-            client = httpx.AsyncClient(headers=headers, verify=verify)
-            response = client.stream(
-                method=method,
-                url=url,
-                content=body,
-                timeout=timeout
-            )
-
-            async def iter_content():
-                try:
-                    async with response as r:
-                        if r.status_code != 200:
-                            content = await r.aread()
-                            raise ServiceError(content.decode(self.charset))
-                        async for data in r.aiter_bytes():
-                            yield data
-                finally:
-                    await client.aclose()
-
-            return iter_content()
-
-    async def request_async(
-            self,
-            method: Literal["GET", "POST"],
-            url: str,
-            body: Optional[Union[bytes, str]] = None,
-            headers: Optional[Mapping[str, str]] = None,
-            timeout: float = 15,
-            num_trials: int = 5,
-            interval: float = 1,
-            retry_factor: float = 0.5,
-            on_error: Optional[ErrorCallback] = None,
-            stream: bool = False,
-            verify: Optional[bool] = None,
-    ):
-        headers = self.headers if headers is None else headers
-        verify = self.verify if verify is None else verify
-
-        err = None
-        for i in range(num_trials):
-            try:
-                return await self._single_request_async(
-                    method=method,
-                    url=url,
-                    body=body,
-                    headers=headers,
-                    timeout=timeout * (1 + i * retry_factor),
-                    stream=stream,
-                    verify=verify,
-                )
-            except httpx.TimeoutException as e:
-                err = e
-                if callable(on_error):
-                    on_error(e)
-            except httpx.HTTPError as e:
-                err = e
-                if callable(on_error):
-                    on_error(e)
-            await asyncio.sleep(interval)
-        raise err
+class JSONRPCRequest(BaseModel):
+    jsonrpc: str = Field(default="2.0")
+    id: Union[str, int] = Field()
+    method: str = Field()
+    params: Optional[Dict[str, Any]] = Field(default=None)
 
 
 class JSONRPCError(BaseModel):
     code: int = Field(default=0)
     message: str = Field()
     data: Optional[Any] = Field(default=None)
+
+    @classmethod
+    def from_exception(cls, e):
+        err_cls = e.__class__
+        err_name = err_cls.__name__
+        module = err_cls.__module__
+        if module != "builtins":
+            err_name = f"{module}.{err_name}"
+        return cls(
+            code=0,
+            message=str(e),
+            data={
+                "error": err_name,
+                "message": str(e),
+                "traceback": traceback.format_exc()
+            }
+        )
 
 
 class JSONRPCResponse(BaseModel):
@@ -544,64 +348,61 @@ class SSEEvent(BaseModel):
     data: Optional[Any] = Field(default=None)
 
 
-class ChunkStream:
+class SSEDecoder:
+    def __init__(self) -> None:
+        self._event = ""
+        self._data: List[str] = []
+        self._last_event_id = ""
+        self._retry: Optional[int] = None
 
-    def __init__(self, delimiter, charset):
-        self.delimiter = delimiter.encode(charset) if delimiter is not None else None
-        self.charset = charset
+    def decode(self, line: str) -> Optional[SSEEvent]:
+        if not line:
+            if (
+                    not self._event
+                    and not self._data
+                    and not self._last_event_id
+                    and self._retry is None
+            ):
+                return None
 
-    def __call__(self, stream: Iterable[bytes]) -> Iterable[str]:
-        pending: Optional[bytes] = None
-        for data in stream:
-            if pending is not None:
-                data = pending + data
+            sse = SSEEvent(
+                event=self._event,
+                data="\n".join(self._data),
+            )
 
-            chunks = data.split(self.delimiter) if self.delimiter else data.splitlines()
-            pending = chunks.pop() if chunks and chunks[-1] and chunks[-1][-1] == data[-1] else None
+            # NOTE: as per the SSE spec, do not reset last_event_id.
+            self._event = ""
+            self._data = []
+            self._retry = None
 
-            for chunk in chunks:
-                yield chunk.decode(self.charset)
+            return sse
 
-        if pending is not None:
-            yield pending.decode(self.charset)
+        if line.startswith(":"):
+            return None
 
+        fieldname, _, value = line.partition(":")
 
-class SSEStream:
+        if value.startswith(" "):
+            value = value[1:]
 
-    def __init__(self, delimiter, charset):
-        self.chunk_stream = ChunkStream(delimiter, charset)
-
-    def __call__(self, stream: Iterable[bytes]):
-        for chunk in self.chunk_stream(stream):
-            chunk = chunk.strip()
-            if not chunk:
-                continue
-
-            yield self._decode_chunk(chunk)
-
-    def _decode_chunk(self, chunk: str) -> SSEEvent:
-        lines = chunk.strip().split("\n")
-        if len(lines) == 2:
-            event_line, data_line = lines
-            if not (event_line.startswith("event:") and data_line.startswith("data:")):
-                raise RuntimeError(f"Failed to decode chunk: \"{chunk}\".")
-            event = event_line[len("event:"):]
-            data = data_line[len("data:"):]
-        elif len(lines) == 1:
-            line = lines[0]
-            if line.startswith("event:"):
-                event = line[len("event:"):]
-                data = None
-            elif line.startswith("data:"):
-                event = "message"
-                data = line[len("data:"):]
+        if fieldname == "event":
+            self._event = value
+        elif fieldname == "data":
+            self._data.append(value)
+        elif fieldname == "id":
+            if "\0" in value:
+                pass
             else:
-                event = "message"
-                data = line
+                self._last_event_id = value
+        elif fieldname == "retry":
+            try:
+                self._retry = int(value)
+            except (TypeError, ValueError):
+                pass
         else:
-            raise RuntimeError(f"Failed to decode chunk: \"{chunk}\".")
+            pass  # Field is ignored.
 
-        return SSEEvent(event=event, data=data)
+        return None
 
 
 class APIClient:
@@ -611,7 +412,7 @@ class APIClient:
             base_url: Optional[str] = None,
             headers: Optional[Mapping[str, str]] = None,
             content_type: str = ContentType.json.value,
-            accept: str = f"{ContentType.json},{ContentType.sse}",
+            accept: str = f"{ContentType.plain.value},{ContentType.json.value},{ContentType.sse.value}",
             user_agent: str = "libentry.api_mcp.APIClient",
             connection: str = "close",
             api_key: Optional[str] = None,
@@ -652,13 +453,15 @@ class APIClient:
             num_trials: int = 5,
             interval: float = 1,
             retry_factor: float = 0.5,
-            on_error: Optional[ErrorCallback] = None,
+            on_error: Optional[Callable[[Exception], None]] = None,
             stream: Optional[bool] = None,
             stream_delimiter: Optional[str] = None,
             verify: Optional[bool] = None,
     ):
         full_url = urljoin(self.http_client.base_url, path)
-        req_mime, _ = self.http_client.find_content_type(headers)
+        if headers is None:
+            headers = {}
+        req_mime, _ = self.http_client.find_content_type(headers, self.http_client.headers)
         if (req_mime is None) or req_mime in {ContentType.json.value, ContentType.plain.value}:
             payload = json.dumps(json_data) if json_data is not None else None
         elif req_mime == ContentType.form.value:
@@ -693,20 +496,24 @@ class APIClient:
             if resp_mime is None or resp_mime == ContentType.plain.value:
                 return content
             elif resp_mime == ContentType.json.value:
-                return _load_json_or_str(content)
+                try:
+                    return json.loads(content)
+                except ValueError:
+                    # fallback to raw text
+                    return content
             else:
                 raise RuntimeError(f"Unsupported response MIME: \"{resp_mime}\".")
         else:
             if resp_mime is None or resp_mime == ContentType.sse.value:
                 if stream_delimiter is None:
-                    stream_delimiter = "\n\n"
-                chunks = self.iter_chunks(content, stream_delimiter)
-                return self.iter_events(chunks, resp_charset)
+                    stream_delimiter = "\n"
+                chunks = self._iter_chunks(content, stream_delimiter)
+                return self._iter_events(chunks, resp_charset)
             else:
                 raise RuntimeError(f"Unsupported response MIME: \"{resp_mime}\".")
 
     @staticmethod
-    def iter_chunks(bytes_stream: Iterable[bytes], delimiter: Union[bytes, str]) -> Iterable[bytes]:
+    def _iter_chunks(bytes_stream: Iterable[bytes], delimiter: Union[bytes, str]) -> Iterable[bytes]:
         if isinstance(delimiter, str):
             delimiter = delimiter.encode()
 
@@ -725,37 +532,44 @@ class APIClient:
             yield pending
 
     @staticmethod
-    def iter_events(chunks: Iterable[bytes], charset: str) -> Iterable[SSEEvent]:
-        d = "\n"
-        ep = "event:"
-        dp = "data:"
-        for chunk in chunks:
-            chunk = chunk.strip()
-            if not chunk:
-                continue
+    def _iter_events(chunks: Iterable[bytes], charset: str) -> Iterable[SSEEvent]:
+        decoder = SSEDecoder()
+        for line in chunks:
+            line = line.rstrip().decode(charset)
+            sse = decoder.decode(line)
+            if sse is not None:
+                yield sse
 
-            lines = chunk.decode(charset).split(d)
-            if len(lines) == 2:
-                event_line, data_line = lines
-                if not (event_line.startswith(ep) and data_line.startswith(dp)):
-                    raise RuntimeError(f"Failed to decode chunk: \"{chunk}\".")
-                event = event_line[len(ep):]
-                data = data_line[len(dp):]
-            elif len(lines) == 1:
-                line = lines[0]
-                if line.startswith(ep):
-                    event = line[len(ep):]
-                    data = None
-                elif line.startswith(dp):
-                    event = "message"
-                    data = line[len(dp):]
-                else:
-                    event = "message"
-                    data = line
-            else:
-                raise RuntimeError(f"Failed to decode chunk: \"{chunk}\".")
-
-            yield SSEEvent(event=event, data=data)
+        # delimiter = "\n"
+        # evnet_prefix = "event:"
+        # data_prefix = "data:"
+        # for chunk in chunks:
+        #     chunk = chunk.strip()
+        #     if not chunk:
+        #         continue
+        #
+        #     lines = chunk.decode(charset).split(delimiter)
+        #     if len(lines) == 2:
+        #         event_line, data_line = lines
+        #         if not (event_line.startswith(evnet_prefix) and data_line.startswith(data_prefix)):
+        #             raise RuntimeError(f"Failed to decode chunk: \"{chunk}\".")
+        #         event = event_line[len(evnet_prefix):]
+        #         data = data_line[len(data_prefix):]
+        #     elif len(lines) == 1:
+        #         line = lines[0]
+        #         if line.startswith(evnet_prefix):
+        #             event = line[len(evnet_prefix):]
+        #             data = None
+        #         elif line.startswith(data_prefix):
+        #             event = "message"
+        #             data = line[len(data_prefix):]
+        #         else:
+        #             event = "message"
+        #             data = line
+        #     else:
+        #         raise RuntimeError(f"Failed to decode chunk: \"{chunk}\".")
+        #
+        #     yield SSEEvent(event=event, data=data)
 
     def call(
             self,
@@ -765,22 +579,20 @@ class APIClient:
             num_trials: int = 5,
             interval: float = 1,
             retry_factor: float = 0.5,
-            on_error: Optional[ErrorCallback] = None,
+            on_error: Optional[Callable[[Exception], None]] = None,
             stream: Optional[bool] = None
     ) -> Any:
         request_id = str(uuid.uuid4())
-        request = {
+        request: Dict[str, Any] = {
             "jsonrpc": "2.0",
             "id": request_id,
             "method": name,
         }
         if params is not None:
             request["params"] = params
-        accepts = [ContentType.plain.value, ContentType.json.value, ContentType.sse.value]
         response = self.request(
             "POST",
             "/" + name,
-            headers={"Accept": ",".join(accepts)},
             json_data=request,
             timeout=timeout,
             num_trials=num_trials,
@@ -789,20 +601,28 @@ class APIClient:
             on_error=on_error,
             stream=stream
         )
-
         if not isinstance(response, GeneratorType):
-            resp = JSONRPCResponse.model_validate(response)
-            if resp.error is not None:
-                raise ServiceError(resp.error.data)
-            if resp.result is not None:
-                return resp.result
-            else:
-                raise ServiceError("The response doesn't contain any result.")
+            if not isinstance(response, Mapping):
+                raise ServiceError(
+                    f"Invalid response type. "
+                    f"Expected JSON object, got {type(response)}."
+                )
+            return self._get_result(response)
         else:
-            return self.iter_results(response)
+            return self._iter_results(response)
 
     @staticmethod
-    def iter_results(response: Iterable[SSEEvent]):
+    def _get_result(response: Mapping[str, Any]):
+        resp = JSONRPCResponse.model_validate(response)
+        if resp.error is not None:
+            raise ServiceError(resp.error.data)
+        if resp.result is not None:
+            return resp.result
+        else:
+            raise ServiceError("The response doesn't contain any result.")
+
+    @staticmethod
+    def _iter_results(response: Iterable[SSEEvent]):
         for sse in response:
             if not isinstance(sse, SSEEvent):
                 raise ServiceError("Not a valid event stream.")
@@ -830,54 +650,124 @@ class SSESession:
         self.sse_thread = Thread(target=self._sse_loop, daemon=True)
         self.sse_thread.start()
 
-        self.lock = Lock()
+        self.lock = Semaphore(0)
         self.endpoint = None
         self.pendings = {}
 
     def _sse_loop(self):
-        response = self.client.get(
-            "/sse",
-            headers={"Accept": ContentType.sse.value},
-            timeout=60,
-            stream=True
-        )
-        for chunk in response:
-            event, data = self._parse_event(chunk)
-            if event is None:
-                continue
-            if event == "endpoint":
-                with self.lock:
-                    self.endpoint = urljoin(self.client.base_url, data)
-            elif event == "message":
-                if isinstance(data, str):
-                    response = json.loads(data)
-                request_id = data
-                with self.lock:
+        response = self.client.request("GET", "/sse", timeout=60, stream=True)
+        type_adapter = TypeAdapter(Union[JSONRPCRequest, JSONRPCResponse, JSONRPCNotification])
+        for sse in response:
+            if sse.event == "endpoint":
+                self.endpoint = urljoin(self.client.http_client.base_url, sse.data)
+                self.lock.release()
+            elif sse.event == "message":
+                obj = type_adapter.validate_python(json.loads(sse.data))
+                if isinstance(obj, JSONRPCRequest):
+                    self._on_request(obj)
+                elif isinstance(obj, JSONRPCNotification):
+                    self._on_notification(obj)
+                elif isinstance(obj, JSONRPCResponse):
+                    self._on_response(obj)
+                else:
                     pass
             else:
-                raise RuntimeError(f"Unknown event {event}.")
-            print(event)
-            print(data)
+                raise RuntimeError(f"Unknown event {sse.event}.")
 
-    def _parse_event(self, chunk):
-        if isinstance(chunk, str):
-            chunk = chunk.strip()
-            i = chunk.find("event:")
-            if i < 0:
-                return None, None
+    def _on_request(self, request: JSONRPCRequest):
+        pass
 
-            j = chunk.find("\ndata:")
-            if j < 0:
-                event = chunk[i + len("event:"):].strip()
-                data = None
-            else:
-                event = chunk[i + len("event:"):j].strip()
-                data = chunk[j + len("\ndata:"):]
-            return event, data
-        elif isinstance(chunk, dict):
-            if "event" in chunk and "data" in chunk:
-                return chunk["event"], chunk["data"]
-        return None, None
+    def _on_notification(self, notification: JSONRPCNotification):
+        pass
+
+    def _on_response(self, response: JSONRPCResponse):
+        request_id = response.id
+        with self.lock:
+            pending = self.pendings.get(request_id)
+
+        if pending is not None:
+            pending.put(response)
+
+    def call(
+            self,
+            name: str,
+            params: Optional[Mapping[str, Any]] = None,
+            timeout: float = 15,
+            num_trials: int = 5,
+            interval: float = 1,
+            retry_factor: float = 0.5,
+            on_error: Optional[Callable[[Exception], None]] = None,
+    ) -> Any:
+        request_id = str(uuid.uuid4())
+        with self.lock:
+            endpoint = self.endpoint
+            assert request_id not in self.pendings
+            pending = Queue(8)
+            self.pendings[request_id] = pending
+
+        request = JSONRPCRequest(id=request_id, method=name, params=params)
+        self.client.request(
+            "POST",
+            endpoint,
+            json_data=request.model_dump(exclude_none=True),
+            timeout=timeout,
+            num_trials=num_trials,
+            interval=interval,
+            retry_factor=retry_factor,
+            on_error=on_error,
+            stream=False
+        )
+
+        response = pending.get()
+        with self.lock:
+            del self.pendings[request_id]
+
+        if not isinstance(response, JSONRPCResponse):
+            raise ServiceError(
+                f"Invalid response type. "
+                f"Expect JSONRPCResponse, got {type(response)}."
+            )
+
+        if response.error is not None:
+            raise ServiceError(response.error.data)
+        if response.result is not None:
+            return response.result
+        else:
+            raise ServiceError("The response doesn't contain any result.")
+
+    def notify(
+            self,
+            name: str,
+            params: Optional[Mapping[str, Any]] = None,
+            timeout: float = 15,
+            num_trials: int = 5,
+            interval: float = 1,
+            retry_factor: float = 0.5,
+            on_error: Optional[Callable[[Exception], None]] = None,
+    ) -> Any:
+        with self.lock:
+            endpoint = self.endpoint
+
+        request = JSONRPCNotification(method=name, params=params)
+        self.client.request(
+            "POST",
+            endpoint,
+            json_data=request.model_dump(exclude_none=True),
+            timeout=timeout,
+            num_trials=num_trials,
+            interval=interval,
+            retry_factor=retry_factor,
+            on_error=on_error,
+            stream=False
+        )
+
 
     def initialize(self):
-        pass
+        params = {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "libentry-client", "version": "1.0.0"}
+        }
+        result = self.call("initialize", params)
+        print(result)
+        self.notify("notifications/initialized")

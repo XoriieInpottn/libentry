@@ -2,11 +2,6 @@
 
 __author__ = "xi"
 __all__ = [
-    "JSONRPCRequest",
-    "JSONRPCError",
-    "JSONRPCResponse",
-    "JSONRPCNotification",
-    "SSEEvent",
     "MCPAdapter",
     "JSONAdapter",
     "FlaskFunction",
@@ -28,10 +23,11 @@ from types import GeneratorType
 from typing import Any, Callable, Dict, Iterable, Optional, Type, Union
 
 from flask import Flask, request as flask_request
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from libentry import api_mcp as api, json, logger
-from libentry.api_mcp import APIInfo, ContentType, list_api_info
+from libentry.api_mcp import APIInfo, ContentType, JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, \
+    SSEEvent, list_api_info
 from libentry.schema import query_api
 
 try:
@@ -53,54 +49,6 @@ except ImportError:
             logger.warn("Use Flask directly.")
             logger.warn("Options like \"num_threads\", \"num_workers\" are ignored.")
             return flask_server.run(host=host, port=port)
-
-
-class JSONRPCRequest(BaseModel):
-    jsonrpc: str = Field(default="2.0")
-    id: Union[str, int] = Field()
-    method: str = Field()
-    params: Optional[Dict[str, Any]] = Field(default=None)
-
-
-class JSONRPCError(BaseModel):
-    code: int = Field(default=0)
-    message: str = Field()
-    data: Optional[Any] = Field(default=None)
-
-    @classmethod
-    def from_exception(cls, e):
-        err_cls = e.__class__
-        err_name = err_cls.__name__
-        module = err_cls.__module__
-        if module != "builtins":
-            err_name = f"{module}.{err_name}"
-        return cls(
-            code=0,
-            message=str(e),
-            data={
-                "error": err_name,
-                "message": str(e),
-                "traceback": traceback.format_exc()
-            }
-        )
-
-
-class JSONRPCResponse(BaseModel):
-    jsonrpc: str = Field(default="2.0")
-    id: Union[str, int] = Field()
-    result: Optional[Any] = Field(default=None)
-    error: Optional[JSONRPCError] = Field(default=None)
-
-
-class JSONRPCNotification(BaseModel):
-    jsonrpc: str = Field(default="2.0")
-    method: str = Field()
-    params: Optional[Dict[str, Any]] = Field(default=None)
-
-
-class SSEEvent(BaseModel):
-    event: str = Field()
-    data: Any = Field()
 
 
 class MCPAdapter:
@@ -198,9 +146,10 @@ class JSONAdapter:
         self.fn = MCPAdapter(fn) if not isinstance(fn, MCPAdapter) else fn
         self.type_adapter = TypeAdapter(Union[JSONRPCRequest, JSONRPCNotification])
 
-    def __call__(self, json_input: Dict[str, Any]) -> Any:
-        mcp_request = self.type_adapter.validate_python(json_input)
-        return self.fn(mcp_request)
+    def __call__(self, request: Union[Dict[str, Any], JSONRPCRequest, JSONRPCNotification]):
+        if not isinstance(request, (JSONRPCRequest, JSONRPCNotification)):
+            request = self.type_adapter.validate_python(request)
+        return self.fn(request)
 
 
 class FlaskFunction:
@@ -328,22 +277,38 @@ class SSEMixIn:
 
     @api.route("/message", skip_adapter=True)
     def message(self, request: Dict[str, Any]) -> None:
-        try:
-            method = request["method"]
-        except KeyError:
-            return
+        ################################################################################
+        # session validation
+        ################################################################################
+        session_id = request.get("sessionId")
+        if session_id is None:
+            raise RuntimeError("You should start a session by request the \"/sse\" endpoint first.")
+        with self.lock:
+            if session_id not in self.sse_dict:
+                raise RuntimeError(f"Invalid session: \"{session_id}\".")
 
-        print("/message", request)
-        path = "/" + method
+        ################################################################################
+        # validate request
+        ################################################################################
+        type_adapter = TypeAdapter(Union[JSONRPCRequest, JSONRPCNotification])
+        mcp_request = type_adapter.validate_python(request)
+        print("/message", mcp_request)
+
+        ################################################################################
+        # call the mcp method
+        ################################################################################
+        path = "/" + mcp_request.method
         service_routes = getattr(self, "service_routes")
         internal_routes = getattr(self, "internal_routes")
         route = service_routes.get(path, internal_routes.get(path))
         if route is None:
-            raise RuntimeError(f"Invalid method {method}.")
+            raise RuntimeError(f"Method {mcp_request.method} doesn't exist.")
 
-        response = route["flask_fn"].fn(request)
+        response = route["flask_fn"].fn(mcp_request)
 
-        session_id = request["sessionId"]
+        ################################################################################
+        # put response
+        ################################################################################
         with self.lock:
             queue = self.sse_dict[session_id]
 
