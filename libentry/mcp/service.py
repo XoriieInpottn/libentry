@@ -21,7 +21,8 @@ from libentry.mcp.types import CallToolRequestParams, CallToolResult, ContentTyp
     InitializeRequestParams, \
     InitializeResult, JSONRPCError, \
     JSONRPCNotification, JSONRPCRequest, \
-    JSONRPCResponse, SSE, ServerCapabilities, TextContent, ToolsCapability
+    JSONRPCResponse, ListToolsResult, SSE, ServerCapabilities, TextContent, Tool, ToolProperty, ToolSchema, \
+    ToolsCapability
 from libentry.schema import query_api
 
 try:
@@ -313,44 +314,42 @@ class NotificationsMixIn:
 
 class ToolsMixIn:
 
-    @api.route("/tools/list")
-    def tools_list(self):
-        service_routes: Dict[str, Route] = getattr(self, "service_routes")
+    def __init__(self):
+        self.service_routes: dict[str, Route] = {}
 
+    @api.route("/tools/list")
+    def list(self) -> ListToolsResult:
         tools = []
-        for route in service_routes.values():
+        for route in self.service_routes.values():
             api_info = route.api_info
             fn = route.fn
-            tool_item = {
-                "name": api_info.path,
-                "description": "NO",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            }
-            tools.append(tool_item)
+            tool = Tool(
+                name=api_info.path[1:],
+                description=None,
+                inputSchema=ToolSchema()
+            )
+            tools.append(tool)
             schema = query_api(fn)
             input_schema = schema.context[schema.input_schema]
             for field in input_schema.fields:
-                tool_item["inputSchema"]["properties"][field.name] = {
-                    "type": field.type,
-                    "description": field.description
-                }
+                tool.inputSchema.properties[field.name] = ToolProperty(
+                    type=field.type,
+                    description=field.description
+                )
                 if field.is_required:
-                    tool_item["inputSchema"]["required"].append(field.name)
-        return {"tools": tools}
+                    tool.inputSchema.required.append(field.name)
+        return ListToolsResult(tools=tools)
 
     @api.route("/tools/call")
     def call(self, params: CallToolRequestParams) -> CallToolResult:
-        rpc_fn = self._get_rpc_fn(params.name)
-        if rpc_fn is None:
+        route = self.service_routes.get(f"/{params.name}")
+        if route is None:
             return CallToolResult(
                 content=[TextContent(text=f"Tool \"{params.name}\" doesn't exist.")],
                 isError=True
             )
 
+        rpc_fn = route.handler.fn
         rpc_request = JSONRPCRequest(
             id=str(uuid.uuid4()),
             method=params.name,
@@ -377,14 +376,6 @@ class ToolsMixIn:
                 content=[TextContent(text="Unknown error.")],
                 isError=True
             )
-
-    def _get_rpc_fn(self, name: str):
-        service_routes: Dict[str, Route] = getattr(self, "service_routes")
-        route = service_routes.get(f"/{name}")
-        if route is None:
-            return None
-        handler: FlaskHandler = route.handler
-        return handler.fn
 
 
 @dataclass
