@@ -359,3 +359,77 @@ class CallToolResult(BaseModel):
 
     content: List[TextContent]
     isError: bool = False
+
+
+class Resource(BaseModel):
+    """A known resource that the server is capable of reading."""
+
+    uri: str
+    """The URI of this resource."""
+    name: str
+    """A human-readable name for this resource."""
+    description: Optional[str] = None
+    """A description of what this resource represents."""
+    mimeType: Optional[str] = None
+    """The MIME type of this resource, if known."""
+    size: Optional[int] = None
+    """
+    The size of the raw resource content, in bytes (i.e., before base64 encoding
+    or any tokenization), if known.
+
+    This can be used by Hosts to display file sizes and estimate context window usage.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
+class ListResourcesResult(PaginatedResult):
+    """The server's response to a resources/list request from the client."""
+
+    resources: List[Resource]
+
+
+class ReadResourceRequestParams(BaseModel):
+    """Parameters for reading a resource."""
+
+    uri: str
+    """
+    The URI of the resource to read. The URI can use any protocol; it is up to the
+    server how to interpret it.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
+class ResourceContents(BaseModel):
+    """The contents of a specific resource or sub-resource."""
+
+    uri: str
+    """The URI of this resource."""
+    mimeType: Optional[str] = None
+    """The MIME type of this resource, if known."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class TextResourceContents(ResourceContents):
+    """Text contents of a resource."""
+
+    text: str
+    """
+    The text of the item. This must only be set if the item can actually be represented
+    as text (not binary data).
+    """
+
+
+class BlobResourceContents(ResourceContents):
+    """Binary contents of a resource."""
+
+    blob: str
+    """A base64-encoded string representing the binary data of the item."""
+
+
+class ReadResourceResult(BaseModel):
+    """The server's response to a resources/read request from the client."""
+
+    contents: List[Union[TextResourceContents, BlobResourceContents]]

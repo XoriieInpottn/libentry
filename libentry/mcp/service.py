@@ -3,6 +3,7 @@
 __author__ = "xi"
 
 import asyncio
+import base64
 import uuid
 from dataclasses import dataclass
 from queue import Empty, Queue
@@ -16,9 +17,11 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from libentry import json, logger
 from libentry.mcp import api
 from libentry.mcp.api import APIInfo, list_api_info
-from libentry.mcp.types import CallToolRequestParams, CallToolResult, Implementation, InitializeRequestParams, \
-    InitializeResult, JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, ListToolsResult, MIME, SSE, \
-    ServerCapabilities, TextContent, Tool, ToolProperty, ToolSchema, ToolsCapability
+from libentry.mcp.types import BlobResourceContents, CallToolRequestParams, CallToolResult, Implementation, \
+    InitializeRequestParams, \
+    InitializeResult, JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, ListResourcesResult, \
+    ListToolsResult, MIME, ReadResourceRequestParams, ReadResourceResult, Resource, SSE, \
+    ServerCapabilities, TextContent, TextResourceContents, Tool, ToolProperty, ToolSchema, ToolsCapability
 from libentry.schema import get_api_signature, query_api
 
 try:
@@ -378,7 +381,7 @@ class LifeCycleMixIn:
 class NotificationsMixIn:
 
     @api.route("/notifications/initialized")
-    def initialized(self):
+    def notifications_initialized(self):
         pass
 
 
@@ -388,15 +391,15 @@ class ToolsMixIn:
         self.service_routes: Dict[str, Route] = {}
 
     @api.route("/tools/list")
-    def list(self) -> ListToolsResult:
+    def tools_list(self) -> ListToolsResult:
         tools = []
         for route in self.service_routes.values():
             api_info = route.api_info
             if api_info.tag != "tool":
                 continue
             tool = Tool(
-                name=api_info.path[1:],
-                description=None,
+                name=api_info.name,
+                description=api_info.description,
                 inputSchema=ToolSchema()
             )
             tools.append(tool)
@@ -415,7 +418,7 @@ class ToolsMixIn:
         return ListToolsResult(tools=tools)
 
     @api.route("/tools/call")
-    def call(self, params: CallToolRequestParams) -> CallToolResult:
+    def tools_call(self, params: CallToolRequestParams) -> CallToolResult:
         route = self.service_routes.get(f"/{params.name}")
         if route is None:
             return CallToolResult(
@@ -457,6 +460,60 @@ class ToolsMixIn:
             )
 
 
+class ResourcesMinIn:
+
+    def __init__(self):
+        self.service_routes: Dict[str, Route] = {}
+
+    @api.route("/resources/list")
+    def resources_list(self) -> ListResourcesResult:
+        resources = []
+        for route in self.service_routes.values():
+            api_info = route.api_info
+            if api_info.tag != "resource":
+                continue
+            uri = api_info.model_extra.get("uri", api_info.path)
+            resources.append(Resource(
+                uri=uri,
+                name=api_info.name,
+                description=api_info.description,
+                mimeType=api_info.model_extra.get("mimeType"),
+                size=api_info.model_extra.get("size")
+            ))
+        return ListResourcesResult(resources=resources)
+
+    @api.route("/resources/read")
+    def resources_read(self, request: ReadResourceRequestParams) -> ReadResourceResult:
+        for route in self.service_routes.values():
+            api_info = route.api_info
+            if api_info.tag != "resource":
+                continue
+            uri = api_info.model_extra.get("uri")
+            if uri != request.uri:
+                continue
+            result = ReadResourceResult(contents=[])
+            content = route.fn()
+            if isinstance(content, str):
+                mime_type = api_info.model_extra.get("mimeType", "text/*")
+                result.contents.append(TextResourceContents(
+                    uri=uri,
+                    mimeType=mime_type,
+                    text=content
+                ))
+            elif isinstance(content, bytes):
+                mime_type = api_info.model_extra.get("mimeType", "binary/*")
+                result.contents.append(BlobResourceContents(
+                    uri=uri,
+                    mimeType=mime_type,
+                    blob=base64.b64encode(content).decode()
+                ))
+            else:
+                raise RuntimeError(f"Unsupported content type \"{type(content)}\".")
+            return result
+
+        raise RuntimeError(f"Resource \"{request.uri}\" doesn't exist.")
+
+
 @dataclass
 class Route:
     api_info: APIInfo
@@ -464,7 +521,7 @@ class Route:
     handler: FlaskHandler
 
 
-class FlaskServer(Flask, SSEMixIn, LifeCycleMixIn, NotificationsMixIn, ToolsMixIn):
+class FlaskServer(Flask, SSEMixIn, LifeCycleMixIn, NotificationsMixIn, ToolsMixIn, ResourcesMinIn):
 
     def __init__(self, service):
         Flask.__init__(self, __name__)
@@ -472,6 +529,7 @@ class FlaskServer(Flask, SSEMixIn, LifeCycleMixIn, NotificationsMixIn, ToolsMixI
         LifeCycleMixIn.__init__(self)
         NotificationsMixIn.__init__(self)
         ToolsMixIn.__init__(self)
+        ResourcesMinIn.__init__(self)
 
         self.service = service
 
