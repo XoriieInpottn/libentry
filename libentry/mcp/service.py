@@ -572,7 +572,7 @@ class FlaskServer(Flask, SSEMixIn, LifeCycleMixIn, NotificationsMixIn, ToolsMixI
             all_api = []
             for route in self.service_routes.values():
                 api_info = route.api_info
-                all_api.append({"path": api_info.path})
+                all_api.append(api_info)
             return all_api
 
         path = "/" + name
