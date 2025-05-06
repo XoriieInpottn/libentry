@@ -2,6 +2,7 @@
 
 __author__ = "xi"
 
+import uuid
 from queue import Queue
 from threading import Semaphore, Thread
 from time import sleep
@@ -12,8 +13,8 @@ import httpx
 from pydantic import TypeAdapter
 
 from libentry import json
-from libentry.mcp.types import ContentType, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, JSONRequest, \
-    JSONResponse, SSE, ServiceError, _JSONRequest
+from libentry.mcp.types import JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, JSONRequest, JSONResponse, MIME, \
+    SSE, ServiceError, _JSONRequest
 
 
 class SSEDecoder:
@@ -80,8 +81,8 @@ class APIClient:
             self,
             base_url: Optional[str] = None,
             headers: Optional[Dict[str, str]] = None,
-            content_type: str = ContentType.json.value,
-            accept: str = f"{ContentType.plain.value},{ContentType.json.value},{ContentType.sse.value}",
+            content_type: str = MIME.json.value,
+            accept: str = f"{MIME.plain.value},{MIME.json.value},{MIME.sse.value}",
             user_agent: str = "python-libentry",
             connection: str = "keep-alive",
             api_key: Optional[str] = None,
@@ -166,9 +167,9 @@ class APIClient:
             {**self.headers, **request.headers}
         )
         req_mime, _ = self.find_content_type(headers)
-        if (req_mime is None) or req_mime in {ContentType.json.value, ContentType.plain.value}:
+        if (req_mime is None) or req_mime in {MIME.json.value, MIME.plain.value}:
             payload = json.dumps(request.json_obj) if request.json_obj is not None else None
-        elif req_mime == ContentType.form.value:
+        elif req_mime == MIME.form.value:
             payload = self.x_www_form_urlencoded(request.json_obj) if request.json_obj is not None else None
         else:
             raise ValueError(f"Unsupported request MIME: \"{req_mime}\".")
@@ -192,16 +193,16 @@ class APIClient:
             stream = "-stream" in resp_mime
 
         if not stream:
-            if resp_mime is None or resp_mime == ContentType.plain.value:
+            if resp_mime is None or resp_mime == MIME.plain.value:
                 content = self._read_content(httpx_response)
-            elif resp_mime == ContentType.json.value:
+            elif resp_mime == MIME.json.value:
                 content = json.loads(self._read_content(httpx_response))
             else:
                 raise RuntimeError(f"Unsupported response MIME: \"{resp_mime}\".")
         else:
-            if resp_mime is None or resp_mime == ContentType.sse.value:
+            if resp_mime is None or resp_mime == MIME.sse.value:
                 content = self._iter_events(self._iter_lines(httpx_response))
-            elif resp_mime == ContentType.json_stream.value:
+            elif resp_mime == MIME.json_stream.value:
                 content = self._iter_objs(self._iter_lines(httpx_response))
             else:
                 raise RuntimeError(f"Unsupported response MIME: \"{resp_mime}\".")
@@ -370,6 +371,6 @@ class SSESession:
             "capabilities": {},
             "clientInfo": {"name": "libentry-client", "version": "1.0.0"}
         }
-        response = self.rpc_request(JSONRPCRequest(method="initialize", params=params))
+        response = self.rpc_request(JSONRPCRequest(method="initialize", id=str(uuid.uuid4()), params=params))
         print(response.result)
         self.rpc_notify(JSONRPCNotification(method="notifications/initialized"))

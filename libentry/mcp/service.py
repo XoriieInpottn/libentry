@@ -5,25 +5,21 @@ __author__ = "xi"
 import asyncio
 import uuid
 from dataclasses import dataclass
-from inspect import signature
 from queue import Empty, Queue
 from threading import Lock
 from types import GeneratorType
-from typing import Any, Callable, Dict, Iterable, Optional, Type, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Type, Union
 
 from flask import Flask, request as flask_request
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from libentry import json, logger
 from libentry.mcp import api
 from libentry.mcp.api import APIInfo, list_api_info
-from libentry.mcp.types import CallToolRequestParams, CallToolResult, ContentType, Implementation, \
-    InitializeRequestParams, \
-    InitializeResult, JSONRPCError, \
-    JSONRPCNotification, JSONRPCRequest, \
-    JSONRPCResponse, ListToolsResult, SSE, ServerCapabilities, TextContent, Tool, ToolProperty, ToolSchema, \
-    ToolsCapability
-from libentry.schema import query_api
+from libentry.mcp.types import CallToolRequestParams, CallToolResult, Implementation, InitializeRequestParams, \
+    InitializeResult, JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, ListToolsResult, MIME, SSE, \
+    ServerCapabilities, TextContent, Tool, ToolProperty, ToolSchema, ToolsCapability
+from libentry.schema import get_api_signature, query_api
 
 try:
     from gunicorn.app.base import BaseApplication
@@ -53,78 +49,127 @@ class JSONRPCAdapter:
         assert hasattr(fn, "__name__")
         self.__name__ = fn.__name__
 
-        self.input_schema = None
-        params = signature(fn).parameters
-        if len(params) == 1:
-            for name, value in params.items():
-                annotation = value.annotation
-                if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-                    self.input_schema = annotation
+        self.api_signature = get_api_signature(fn)
+
+        # self.input_schema = None
+        # params = signature(fn).parameters
+        # if len(params) == 1:
+        #     for name, value in params.items():
+        #         annotation = value.annotation
+        #         if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        #             self.input_schema = annotation
         self.type_adapter = TypeAdapter(Union[JSONRPCRequest, JSONRPCNotification])
+
+    JSONRPC_REQUEST = 1
+    JSONRPC_NOTIFICATION = 2
+    FALLBACK = 3
 
     def __call__(
             self,
             request: Union[JSONRPCRequest, JSONRPCNotification, Dict[str, Any]]
-    ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse], None]:
+    ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse], Dict[str, Any], Iterable[Dict[str, Any]], None]:
         if isinstance(request, Dict):
-            request = self.type_adapter.validate_python(request)
+            try:
+                request = self.type_adapter.validate_python(request)
+            except ValidationError:
+                pass
+
+        if isinstance(request, JSONRPCRequest):
+            mode = self.JSONRPC_REQUEST
+        elif isinstance(request, JSONRPCNotification):
+            mode = self.JSONRPC_NOTIFICATION
+        elif isinstance(request, Dict):
+            mode = self.FALLBACK
+        else:
+            raise ValueError(
+                f"Invalid request type. "
+                f"Expect JSONRPCRequest, JSONRPCNotification or dict, "
+                f"got {type(request)}."
+            )
 
         try:
-            result = self._call_fn(request)
+            if mode != self.FALLBACK:
+                result = self._call_as_jsonrpc(request)
+            else:
+                result = self._call_as_fallback(request)
         except SystemExit as e:
             raise e
         except KeyboardInterrupt as e:
             raise e
         except Exception as e:
-            if isinstance(request, JSONRPCNotification):
+            if mode == self.JSONRPC_REQUEST:
+                return JSONRPCResponse(
+                    id=request.id,
+                    error=JSONRPCError.from_exception(e)
+                )
+            elif mode == self.JSONRPC_NOTIFICATION:
                 return None
+            else:
+                raise e
 
-            return JSONRPCResponse(
-                jsonrpc=request.jsonrpc,
-                id=request.id,
-                error=JSONRPCError.from_exception(e)
-            )
-
-        if isinstance(request, JSONRPCNotification):
+        if mode == self.JSONRPC_REQUEST:
+            if not isinstance(result, (GeneratorType, range)):
+                return (
+                    result if isinstance(result, JSONRPCResponse) else
+                    JSONRPCResponse(id=request.id, result=result)
+                )
+            else:
+                return (
+                    (item if isinstance(item, JSONRPCResponse) else
+                     JSONRPCResponse(id=request.id, result=item))
+                    for item in result
+                )
+        elif mode == self.JSONRPC_NOTIFICATION:
             return None
-
-        if not isinstance(result, (GeneratorType, range)):
-            return (
-                result if isinstance(result, JSONRPCResponse) else
-                JSONRPCResponse(id=request.id, result=result)
-            )
         else:
-            return (
-                (item if isinstance(item, JSONRPCResponse) else
-                 JSONRPCResponse(id=request.id, result=item))
-                for item in result
-            )
+            return result
 
-    def _call_fn(self, request: Union[JSONRPCRequest, JSONRPCNotification]) -> Any:
-        if issubclass(self.input_schema, (JSONRPCResponse, JSONRPCNotification)):
-            raw_params = self.input_schema.model_validate(request.model_dump())
-            return self.fn(raw_params)
-        elif issubclass(self.input_schema, BaseModel):
-            # Note that "input_schema is not None" means:
-            # (1) The function has only one argument;
-            # (2) The arguments is a BaseModel.
-            # In this case, the request data can be directly validated as a "BaseModel" and
-            # subsequently passed to the function as a single object.
-            pydantic_params = self.input_schema.model_validate(request.params or {})
-            return self.fn(pydantic_params)
+    def _call_as_jsonrpc(self, request: Union[JSONRPCRequest, JSONRPCNotification]):
+        input_model = self.api_signature.input_model
+        if input_model is not None:
+            if issubclass(input_model, (JSONRPCResponse, JSONRPCNotification)):
+                arg = input_model.model_validate(request.model_dump())
+                return self.fn(arg)
+            else:
+                arg = input_model.model_validate(request.params or {})
+                return self.fn(arg)
         else:
-            # The function has multiple arguments, and the request data bundle them as a single object.
-            # So, they should be unpacked before pass to the function.
-            kwargs = request.params or {}
+            bundled_model = self.api_signature.bundled_model
+            kwargs = bundled_model.model_validate(request.params or {}).model_dump()
             return self.fn(**kwargs)
+
+    def _call_as_fallback(self, request: Dict[str, Any]):
+        input_model = self.api_signature.input_model
+        if input_model is not None:
+            arg = input_model.model_validate(request or {})
+            return self.fn(arg)
+        else:
+            bundled_model = self.api_signature.bundled_model
+            kwargs = bundled_model.model_validate(request or {}).model_dump()
+            return self.fn(**kwargs)
+
+        # if issubclass(self.input_schema, (JSONRPCResponse, JSONRPCNotification)):
+        #     raw_params = self.input_schema.model_validate(request.model_dump())
+        #     return self.fn(raw_params)
+        # elif issubclass(self.input_schema, BaseModel):
+        #     # Note that "input_schema is not None" means:
+        #     # (1) The function has only one argument;
+        #     # (2) The arguments is a BaseModel.
+        #     # In this case, the request data can be directly validated as a "BaseModel" and
+        #     # subsequently passed to the function as a single object.
+        #     pydantic_params = self.input_schema.model_validate(request.params or {})
+        #     return self.fn(pydantic_params)
+        # else:
+        #     # The function has multiple arguments, and the request data bundle them as a single object.
+        #     # So, they should be unpacked before pass to the function.
+        #     kwargs = request.params or {}
+        #     return self.fn(**kwargs)
 
 
 class FlaskHandler:
 
     def __init__(self, fn: Callable, api_info: APIInfo, app: "FlaskServer"):
-        if not api_info.extra_info.get("skip_adapter", False):
-            fn = JSONRPCAdapter(fn)
-        self.fn = fn
+        self.fn = fn if api_info.tag == "schema_free" else JSONRPCAdapter(fn)
         self.api_info = api_info
         self.app = app
         assert hasattr(fn, "__name__")
@@ -137,7 +182,7 @@ class FlaskHandler:
 
         json_from_url = {**args}
         if data:
-            if (not content_type) or content_type == ContentType.json.value:
+            if (not content_type) or content_type == MIME.json.value:
                 json_from_data = json.loads(data)
             else:
                 return self.app.error(f"Unsupported Content-Type: \"{content_type}\".")
@@ -162,37 +207,46 @@ class FlaskHandler:
         # Parse MCP response
         ################################################################################
         accepts = flask_request.accept_mimetypes
-        print(input_json, [*accepts])
+        mimetype = MIME.json.value if MIME.json.value in accepts else MIME.plain.value
         if mcp_response is None:
             return self.app.ok(
                 None,
-                mimetype=ContentType.json.value
+                mimetype=mimetype
             )
-        elif isinstance(mcp_response, JSONRPCResponse):
+        elif isinstance(mcp_response, BaseModel):
+            # BaseModel
             return self.app.ok(
                 json.dumps(mcp_response.model_dump(exclude_none=True)),
-                mimetype=ContentType.json.value
+                mimetype=mimetype
             )
-        elif isinstance(mcp_response, Dict):
+        elif isinstance(mcp_response, (Dict, List)):
+            # JSON Object and Array
             return self.app.ok(
                 json.dumps(mcp_response),
-                mimetype=ContentType.json.value
+                mimetype=mimetype
             )
         elif isinstance(mcp_response, (GeneratorType, range)):
-            if ContentType.sse.value in accepts:
+            # Stream response
+            if MIME.sse.value in accepts:
+                # SSE is first considered
                 return self.app.ok(
-                    self._sse_stream(mcp_response),
-                    mimetype=ContentType.sse.value
+                    self._iter_sse_stream(mcp_response),
+                    mimetype=MIME.sse.value
                 )
             else:
-                return self.app.error(f"Unsupported Accept: \"{[*accepts]}\".")
+                # JSON Stream for fallback
+                return self.app.ok(
+                    self._iter_sse_stream(mcp_response),
+                    mimetype=MIME.json_stream.value
+                )
         else:
+            # Plain text
             return self.app.ok(
                 str(mcp_response),
-                mimetype=ContentType.json.value
+                mimetype=MIME.plain.value
             )
 
-    def _sse_stream(self, events: Iterable):
+    def _iter_sse_stream(self, events: Iterable[Union[SSE, Dict[str, Any]]]) -> Iterable[str]:
         for item in events:
             if isinstance(item, SSE):
                 event = item.event
@@ -206,12 +260,28 @@ class FlaskHandler:
                 yield "\n"
                 yield "data:"
                 if isinstance(data, BaseModel):
+                    # BaseModel
                     yield json.dumps(data.model_dump(exclude_none=True))
-                elif isinstance(data, Dict):
+                elif isinstance(data, (Dict, List)):
+                    # JSON Object and Array
                     yield json.dumps(data)
                 else:
+                    # Plain text
                     yield str(data)
             yield "\n\n"
+
+    def _iter_json_stream(self, objs: Iterable[Union[BaseModel, Dict[str, Any]]]) -> Iterable[str]:
+        for obj in objs:
+            if isinstance(obj, BaseModel):
+                # BaseModel
+                yield json.dumps(obj.model_dump(exclude_none=True))
+            elif isinstance(obj, (Dict, List)):
+                # JSON Object and Array
+                yield json.dumps(obj)
+            else:
+                # Plain text
+                yield str(obj)
+            yield "\n"
 
 
 class SSEMixIn:
@@ -220,7 +290,7 @@ class SSEMixIn:
         self.lock = Lock()
         self.sse_dict = {}
 
-    @api.get("/sse", skip_adapter=True)
+    @api.get("/sse", tag="schema_free")
     def sse(self, _) -> Iterable[SSE]:
         session_id = str(uuid.uuid4())
         queue = Queue(8)
@@ -245,7 +315,7 @@ class SSEMixIn:
 
         return _stream()
 
-    @api.route("/message", skip_adapter=True)
+    @api.route("/message", tag="schema_free")
     def message(self, request: Dict[str, Any]) -> None:
         ################################################################################
         # session validation
@@ -315,25 +385,29 @@ class NotificationsMixIn:
 class ToolsMixIn:
 
     def __init__(self):
-        self.service_routes: dict[str, Route] = {}
+        self.service_routes: Dict[str, Route] = {}
 
     @api.route("/tools/list")
     def list(self) -> ListToolsResult:
         tools = []
         for route in self.service_routes.values():
             api_info = route.api_info
-            fn = route.fn
+            if api_info.tag != "tool":
+                continue
             tool = Tool(
                 name=api_info.path[1:],
                 description=None,
                 inputSchema=ToolSchema()
             )
             tools.append(tool)
-            schema = query_api(fn)
+            schema = query_api(route.fn)
             input_schema = schema.context[schema.input_schema]
             for field in input_schema.fields:
+                type_ = field.type
+                if isinstance(type_, List):
+                    type_ = "|".join(type_)
                 tool.inputSchema.properties[field.name] = ToolProperty(
-                    type=field.type,
+                    type=type_,
                     description=field.description
                 )
                 if field.is_required:
@@ -346,6 +420,11 @@ class ToolsMixIn:
         if route is None:
             return CallToolResult(
                 content=[TextContent(text=f"Tool \"{params.name}\" doesn't exist.")],
+                isError=True
+            )
+        if route.api_info.tag != "tool":
+            return CallToolResult(
+                content=[TextContent(text=f"\"{params.name}\" is not defined as a tool.")],
                 isError=True
             )
 
@@ -426,7 +505,7 @@ class FlaskServer(Flask, SSEMixIn, LifeCycleMixIn, NotificationsMixIn, ToolsMixI
     def ok(self, body: Union[str, Iterable[str], None], mimetype: str):
         return self.response_class(body, status=200, mimetype=mimetype)
 
-    def error(self, body: str, mimetype=ContentType.plain.value):
+    def error(self, body: str, mimetype=MIME.plain.value):
         return self.response_class(body, status=500, mimetype=mimetype)
 
     @api.get("/")

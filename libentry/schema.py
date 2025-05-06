@@ -2,9 +2,10 @@
 
 __author__ = "xi"
 __all__ = [
+    "APISignature",
+    "get_api_signature",
     "SchemaField",
     "Schema",
-    "ParseContext",
     "parse_type",
     "QueryAPIOutput",
     "query_api",
@@ -13,12 +14,67 @@ __all__ = [
 import enum
 from dataclasses import asdict, dataclass, is_dataclass
 from inspect import signature
-from typing import Any, Dict, Iterable, List, Literal, Mapping, MutableMapping, NoReturn, Optional, Sequence, Union, \
-    get_args, \
-    get_origin
+from typing import Any, Dict, Iterable, List, Literal, Mapping, MutableMapping, NoReturn, Optional, Sequence, Type, \
+    Union, get_args, get_origin
 
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, Field, RootModel, create_model
 from pydantic_core import PydanticUndefined
+
+
+class APISignature(BaseModel):
+    input_types: List[Any]
+    input_model: Optional[Type[BaseModel]] = None
+    bundled_model: Optional[Type[BaseModel]] = None
+    output_type: Optional[Any] = None
+    output_model: Optional[Type[BaseModel]] = None
+
+
+def get_api_signature(fn, ignores: List[str] = ("self", "cls")) -> APISignature:
+    sig = signature(fn)
+
+    input_types = []
+    fields = {}
+    for name, param in sig.parameters.items():
+        if name in ignores:
+            continue
+
+        annotation = param.annotation
+        if annotation is sig.empty:
+            annotation = Any
+
+        input_types.append(annotation)
+
+        default = param.default
+        field = Field() if default is sig.empty else Field(default=default)
+        fields[name] = (annotation, field)
+
+    input_model = None
+    bundled_model = None
+    if len(input_types) == 1:
+        for annotation in input_types:
+            origin = get_origin(annotation) or annotation
+            if isinstance(origin, type) and issubclass(origin, BaseModel):
+                input_model = origin
+    if input_model is None:
+        name = "".join(word.capitalize() for word in fn.__name__.split("_"))
+        bundled_model = create_model(f"{name}Request*", **fields)
+
+    output_type = None
+    output_model = None
+    output_annotation = sig.return_annotation
+    if output_annotation is not None and output_annotation is not NoReturn:
+        if output_annotation is sig.empty:
+            output_annotation = Any
+        output_type = output_annotation
+        output_model = RootModel[output_annotation]
+
+    return APISignature(
+        input_types=input_types,
+        input_model=input_model,
+        bundled_model=bundled_model,
+        output_type=output_type,
+        output_model=output_model
+    )
 
 
 class SchemaField(BaseModel):
@@ -75,13 +131,14 @@ def type_parser(fn):
 
 
 @type_parser
-def _parse_basic_types(context: ParseContext):
+def _parse_basic_types(context: ParseContext) -> Optional[str]:
     if context.origin in {int, float, str, bool}:
         return context.origin.__name__
+    return None
 
 
 @type_parser
-def _parse_dict(context: ParseContext):
+def _parse_dict(context: ParseContext) -> Optional[str]:
     if issubclass(context.origin, Mapping):
         dict_args = get_args(context.annotation)
         if dict_args:
@@ -95,10 +152,11 @@ def _parse_dict(context: ParseContext):
             return f"Dict[{key_type},{value_type}]"
         else:
             return "Dict"
+    return None
 
 
 @type_parser
-def _parse_list(context: ParseContext):
+def _parse_list(context: ParseContext) -> Optional[str]:
     if issubclass(context.origin, Sequence):
         list_args = get_args(context.annotation)
         if list_args:
@@ -110,16 +168,18 @@ def _parse_list(context: ParseContext):
             return f"List[{elem_type}]"
         else:
             return "List"
+    return None
 
 
 @type_parser
-def _parse_enum(context: ParseContext):
+def _parse_enum(context: ParseContext) -> Optional[str]:
     if issubclass(context.origin, enum.Enum):
         return f"Enum[{','.join(e.name for e in context.origin)}]"
+    return None
 
 
 @type_parser
-def _parse_base_model(context: ParseContext):
+def _parse_base_model(context: ParseContext) -> Optional[str]:
     origin = context.origin
     if issubclass(origin, BaseModel):
         _module = origin.__module__
@@ -155,10 +215,11 @@ def _parse_base_model(context: ParseContext):
             context.schemas[model_name] = schema
 
         return model_name
+    return None
 
 
 @type_parser
-def _parse_iterable(context: ParseContext):
+def _parse_iterable(context: ParseContext) -> Optional[str]:
     if context.origin.__name__ in {"Iterable", "Generator", "range"} and issubclass(context.origin, Iterable):
         iter_args = get_args(context.annotation)
         if len(iter_args) != 1:
@@ -167,20 +228,23 @@ def _parse_iterable(context: ParseContext):
         if isinstance(iter_type, list):
             raise TypeError("\"Union\" cannot be used as the type of iterable elements.")
         return f"Iter[{iter_type}]"
+    return None
 
 
 @type_parser
-def _parse_none_type(context: ParseContext):
+def _parse_none_type(context: ParseContext) -> Optional[str]:
     origin = context.origin
     if origin.__module__ == "builtins" and origin.__name__ == "NoneType":
         return "NoneType"
+    return None
 
 
 @type_parser
-def _parse_ndarray(context: ParseContext):
+def _parse_ndarray(context: ParseContext) -> Optional[str]:
     origin = context.origin
     if origin.__module__ == "numpy" and origin.__name__ == "ndarray":
         return "numpy.ndarray"
+    return None
 
 
 def generic_parser(fn):
@@ -189,25 +253,28 @@ def generic_parser(fn):
 
 
 @generic_parser
-def _parse_any(context: ParseContext):
+def _parse_any(context: ParseContext) -> Optional[str]:
     if context.origin is Any or str(context.origin) == str(Any):
         return "Any"
+    return None
 
 
 @generic_parser
-def _parse_union(context: ParseContext):
+def _parse_union(context: ParseContext) -> Optional[List[str]]:
     if context.origin is Union or str(context.origin) == str(Union):
         return [
             parse_type(arg, context.schemas)
             for arg in get_args(context.annotation)
         ]
+    return None
 
 
 @generic_parser
-def _parse_literal(context: ParseContext):
+def _parse_literal(context: ParseContext) -> Optional[str]:
     if context.origin is Literal or str(context.origin) == str(Literal):
         enum_args = get_args(context.annotation)
         return f"Enum[{','.join(map(str, enum_args))}]"
+    return None
 
 
 class QueryAPIOutput(BaseModel):
@@ -217,49 +284,33 @@ class QueryAPIOutput(BaseModel):
     bundled_input: bool
 
 
-def query_api(fn) -> QueryAPIOutput:
-    sig = signature(fn)
-
-    fields = {}
-    for name, param in sig.parameters.items():
-        if name in ["self", "cls"]:
-            continue
-
-        annotation = param.annotation
-        if annotation is sig.empty:
-            annotation = Any
-
-        default = param.default
-        field = Field() if default is sig.empty else Field(default)
-        fields[name] = (annotation, field)
-
-    args_model = None
-    if len(fields) == 1:
-        for annotation, _ in fields.values():
-            origin = get_origin(annotation)
-            if origin is None:
-                origin = annotation
-            if isinstance(origin, type) and issubclass(origin, BaseModel):
-                args_model = origin
-    bundle = args_model is None
-    if bundle:
-        name = "".join(word.capitalize() for word in fn.__name__.split("_"))
-        args_model = create_model(f"{name}Request*", **fields)
+def query_api(obj) -> QueryAPIOutput:
+    api_models = obj if isinstance(obj, APISignature) else get_api_signature(obj)
 
     context = {}
+
+    args_model = api_models.input_model or api_models.bundled_model
     input_schema = parse_type(args_model, context)
+
     output_schema = None
-    return_annotation = sig.return_annotation
-    if return_annotation is not None and return_annotation is not NoReturn:
-        if return_annotation is sig.empty:
-            return_annotation = Any
-        output_schema = parse_type(return_annotation, context)
+    if api_models.output_type is not None:
+        output_schema = parse_type(api_models.output_type, context)
     if isinstance(output_schema, list):
         output_schema = output_schema[0]
+
+    # output_schema = None
+    # sig = signature(fn)
+    # return_annotation = sig.return_annotation
+    # if return_annotation is not None and return_annotation is not NoReturn:
+    #     if return_annotation is sig.empty:
+    #         return_annotation = Any
+    #     output_schema = parse_type(return_annotation, context)
+    # if isinstance(output_schema, list):
+    #     output_schema = output_schema[0]
 
     return QueryAPIOutput(
         input_schema=input_schema,
         output_schema=output_schema,
         context=context,
-        bundled_input=bundle,
+        bundled_input=api_models.bundled_model is not None,
     )

@@ -3,14 +3,13 @@
 __author__ = "xi"
 
 import traceback
-import uuid
 from enum import Enum
-from typing import Any, Callable, Dict, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 
-class ContentType(Enum):
+class MIME(Enum):
     plain = "text/plain"
     form = "application/x-www-form-urlencoded"
     html = "text/html"
@@ -24,6 +23,8 @@ class ContentType(Enum):
 
 
 class _JSONRequest(BaseModel):
+    """JSON request for a single trial"""
+
     method: Literal["GET", "POST"]
     path: str
     json_obj: Optional[Dict[str, Any]] = None
@@ -33,6 +34,8 @@ class _JSONRequest(BaseModel):
 
 
 class JSONRequest(_JSONRequest):
+    """JSON request for multiple trials"""
+
     num_trials: int = 5
     interval: float = 1
     retry_factor: float = 0.5
@@ -40,11 +43,15 @@ class JSONRequest(_JSONRequest):
 
 
 class SSE(BaseModel):
-    event: str = Field()
-    data: Optional[Any] = Field(default=None)
+    """Server Send Event"""
+
+    event: str
+    data: Optional[Any] = None
 
 
 class JSONResponse(BaseModel):
+    """JSON response"""
+
     status_code: int
     headers: Dict[str, str]
     stream: bool
@@ -52,16 +59,16 @@ class JSONResponse(BaseModel):
 
 
 class JSONRPCRequest(BaseModel):
-    jsonrpc: str = Field(default="2.0")
-    id: Union[str, int] = Field(default_factory=lambda: str(uuid.uuid4()))
-    method: str = Field()
-    params: Optional[Dict[str, Any]] = Field(default=None)
+    jsonrpc: str = "2.0"
+    id: Union[str, int]
+    method: str
+    params: Optional[Dict[str, Any]] = None
 
 
 class JSONRPCError(BaseModel):
-    code: int = Field(default=0)
-    message: str = Field()
-    data: Optional[Any] = Field(default=None)
+    code: int = 0
+    message: str
+    data: Optional[Any] = None
 
     @classmethod
     def from_exception(cls, e):
@@ -82,16 +89,16 @@ class JSONRPCError(BaseModel):
 
 
 class JSONRPCResponse(BaseModel):
-    jsonrpc: str = Field(default="2.0")
-    id: Union[str, int] = Field()
-    result: Optional[Any] = Field(default=None)
-    error: Optional[JSONRPCError] = Field(default=None)
+    jsonrpc: Literal["2.0"] = "2.0"
+    id: Union[str, int]
+    result: Optional[Any] = None
+    error: Optional[JSONRPCError] = None
 
 
 class JSONRPCNotification(BaseModel):
-    jsonrpc: str = Field(default="2.0")
-    method: str = Field()
-    params: Optional[Dict[str, Any]] = Field(default=None)
+    jsonrpc: Literal["2.0"] = "2.0"
+    method: str
+    params: Optional[Dict[str, Any]] = None
 
 
 class ServiceError(RuntimeError):
@@ -122,7 +129,7 @@ class ServiceError(RuntimeError):
 
 
 class PaginatedRequest(BaseModel):
-    cursor: str | None = None
+    cursor: Optional[str] = None
     """
     An opaque token representing the current pagination position.
     If provided, the server should return results starting after this cursor.
@@ -130,7 +137,7 @@ class PaginatedRequest(BaseModel):
 
 
 class PaginatedResult(BaseModel):
-    nextCursor: str | None = None
+    nextCursor: Optional[str] = None
     """
     An opaque token representing the pagination position after the last returned result.
     If present, there may be more results available.
@@ -148,7 +155,7 @@ class Implementation(BaseModel):
 class RootsCapability(BaseModel):
     """Capability for root operations."""
 
-    listChanged: bool | None = None
+    listChanged: Optional[bool] = None
     """Whether the client supports notifications for changes to the roots list."""
     model_config = ConfigDict(extra="allow")
 
@@ -162,11 +169,11 @@ class SamplingCapability(BaseModel):
 class ClientCapabilities(BaseModel):
     """Capabilities a client may support."""
 
-    experimental: dict[str, dict[str, Any]] | None = None
+    experimental: Optional[Dict[str, Dict[str, Any]]] = None
     """Experimental, non-standard capabilities that the client supports."""
-    sampling: SamplingCapability | None = None
+    sampling: Optional[SamplingCapability] = None
     """Present if the client supports sampling from an LLM."""
-    roots: RootsCapability | None = None
+    roots: Optional[RootsCapability] = None
     """Present if the client supports listing roots."""
     model_config = ConfigDict(extra="allow")
 
@@ -174,7 +181,7 @@ class ClientCapabilities(BaseModel):
 class PromptsCapability(BaseModel):
     """Capability for prompts operations."""
 
-    listChanged: bool | None = None
+    listChanged: Optional[bool] = None
     """Whether this server supports notifications for changes to the prompt list."""
     model_config = ConfigDict(extra="allow")
 
@@ -182,9 +189,9 @@ class PromptsCapability(BaseModel):
 class ResourcesCapability(BaseModel):
     """Capability for resources operations."""
 
-    subscribe: bool | None = None
+    subscribe: Optional[bool] = None
     """Whether this server supports subscribing to resource updates."""
-    listChanged: bool | None = None
+    listChanged: Optional[bool] = None
     """Whether this server supports notifications for changes to the resource list."""
     model_config = ConfigDict(extra="allow")
 
@@ -192,7 +199,7 @@ class ResourcesCapability(BaseModel):
 class ToolsCapability(BaseModel):
     """Capability for tools operations."""
 
-    listChanged: bool | None = None
+    listChanged: Optional[bool] = None
     """Whether this server supports notifications for changes to the tool list."""
     model_config = ConfigDict(extra="allow")
 
@@ -206,15 +213,15 @@ class LoggingCapability(BaseModel):
 class ServerCapabilities(BaseModel):
     """Capabilities that a server may support."""
 
-    experimental: dict[str, dict[str, Any]] | None = None
+    experimental: Optional[Dict[str, Dict[str, Any]]] = None
     """Experimental, non-standard capabilities that the server supports."""
-    logging: LoggingCapability | None = None
+    logging: Optional[LoggingCapability] = None
     """Present if the server supports sending log messages to the client."""
-    prompts: PromptsCapability | None = None
+    prompts: Optional[PromptsCapability] = None
     """Present if the server offers any prompt templates."""
-    resources: ResourcesCapability | None = None
+    resources: Optional[ResourcesCapability] = None
     """Present if the server offers any resources to read."""
-    tools: ToolsCapability | None = None
+    tools: Optional[ToolsCapability] = None
     """Present if the server offers any tools to call."""
     model_config = ConfigDict(extra="allow")
 
@@ -222,7 +229,7 @@ class ServerCapabilities(BaseModel):
 class InitializeRequestParams(BaseModel):
     """Parameters for the initialize request."""
 
-    protocolVersion: str | int
+    protocolVersion: Union[str, int]
     """The latest version of the Model Context Protocol that the client supports."""
     capabilities: ClientCapabilities
     clientInfo: Implementation
@@ -232,11 +239,11 @@ class InitializeRequestParams(BaseModel):
 class InitializeResult(BaseModel):
     """After receiving an initialize request from the client, the server sends this."""
 
-    protocolVersion: str | int
+    protocolVersion: Union[str, int]
     """The version of the Model Context Protocol that the server wants to use."""
     capabilities: ServerCapabilities
     serverInfo: Implementation
-    instructions: str | None = None
+    instructions: Optional[str] = None
     """Instructions describing how to use the server and its features."""
 
 
@@ -261,16 +268,16 @@ class ToolAnnotations(BaseModel):
     received from untrusted servers.
     """
 
-    title: str | None = None
+    title: Optional[str] = None
     """A human-readable title for the tool."""
 
-    readOnlyHint: bool | None = None
+    readOnlyHint: Optional[bool] = None
     """
     If true, the tool does not modify its environment.
     Default: false
     """
 
-    destructiveHint: bool | None = None
+    destructiveHint: Optional[bool] = None
     """
     If true, the tool may perform destructive updates to its environment.
     If false, the tool performs only additive updates.
@@ -278,7 +285,7 @@ class ToolAnnotations(BaseModel):
     Default: true
     """
 
-    idempotentHint: bool | None = None
+    idempotentHint: Optional[bool] = None
     """
     If true, calling the tool repeatedly with the same arguments 
     will have no additional effect on the its environment.
@@ -286,7 +293,7 @@ class ToolAnnotations(BaseModel):
     Default: false
     """
 
-    openWorldHint: bool | None = None
+    openWorldHint: Optional[bool] = None
     """
     If true, this tool may interact with an "open world" of external
     entities. If false, the tool's domain of interaction is closed.
@@ -298,14 +305,14 @@ class ToolAnnotations(BaseModel):
 
 
 class ToolProperty(BaseModel):
-    type: str | None
-    description: str | None
+    type: Optional[str]
+    description: Optional[str]
 
 
 class ToolSchema(BaseModel):
     type: str = "object"
-    properties: dict[str, ToolProperty] = {}
-    required: list[str] = []
+    properties: Dict[str, ToolProperty] = {}
+    required: List[str] = []
 
 
 class Tool(BaseModel):
@@ -313,11 +320,11 @@ class Tool(BaseModel):
 
     name: str
     """The name of the tool."""
-    description: str | None = None
+    description: Optional[str] = None
     """A human-readable description of the tool."""
-    inputSchema: ToolSchema | None = None
+    inputSchema: Optional[ToolSchema] = None
     """A JSON Schema object defining the expected parameters for the tool."""
-    annotations: ToolAnnotations | None = None
+    annotations: Optional[ToolAnnotations] = None
     """Optional additional tool information."""
     model_config = ConfigDict(extra="allow")
 
@@ -325,7 +332,7 @@ class Tool(BaseModel):
 class ListToolsResult(PaginatedResult):
     """The server's response to a tools/list request from the client."""
 
-    tools: list[Tool]
+    tools: List[Tool]
 
 
 class TextContent(BaseModel):
@@ -334,6 +341,7 @@ class TextContent(BaseModel):
     type: Literal["text"] = "text"
     text: str
     """The text content of the message."""
+
     model_config = ConfigDict(extra="allow")
 
 
@@ -341,12 +349,13 @@ class CallToolRequestParams(BaseModel):
     """Parameters for calling a tool."""
 
     name: str
-    arguments: dict[str, Any] | None = None
+    arguments: Optional[Dict[str, Any]] = None
+
     model_config = ConfigDict(extra="allow")
 
 
 class CallToolResult(BaseModel):
     """The server's response to a tool call."""
 
-    content: list[TextContent]
+    content: List[TextContent]
     isError: bool = False
