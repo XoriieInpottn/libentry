@@ -59,8 +59,14 @@ class JSONResponse(BaseModel):
 
 
 class JSONRPCRequest(BaseModel):
-    jsonrpc: str = "2.0"
+    jsonrpc: Literal["2.0"]
     id: Union[str, int]
+    method: str
+    params: Optional[Dict[str, Any]] = None
+
+
+class JSONRPCNotification(BaseModel):
+    jsonrpc: Literal["2.0"]
     method: str
     params: Optional[Dict[str, Any]] = None
 
@@ -93,12 +99,6 @@ class JSONRPCResponse(BaseModel):
     id: Union[str, int]
     result: Optional[Any] = None
     error: Optional[JSONRPCError] = None
-
-
-class JSONRPCNotification(BaseModel):
-    jsonrpc: Literal["2.0"] = "2.0"
-    method: str
-    params: Optional[Dict[str, Any]] = None
 
 
 class ServiceError(RuntimeError):

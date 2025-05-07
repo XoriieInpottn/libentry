@@ -181,7 +181,7 @@ class APIClient:
             headers=headers,
             timeout=request.timeout
         )
-        httpx_response = self.client.send(httpx_request)
+        httpx_response = self.client.send(httpx_request, stream=True)
 
         if httpx_response.status_code // 100 != 2:
             raise ServiceError(self._read_content(httpx_response))
@@ -225,7 +225,8 @@ class APIClient:
     @staticmethod
     def _iter_lines(response: httpx.Response) -> Iterable[str]:
         try:
-            yield from response.iter_lines()
+            for line in response.iter_lines():
+                yield line
         finally:
             response.close()
 

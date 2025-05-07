@@ -12,7 +12,7 @@ from types import GeneratorType
 from typing import Any, Callable, Dict, Iterable, List, Optional, Type, Union
 
 from flask import Flask, request as flask_request
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter
 
 from libentry import json, logger
 from libentry.mcp import api
@@ -54,94 +54,91 @@ class JSONRPCAdapter:
 
         self.api_signature = get_api_signature(fn)
 
-        # self.input_schema = None
-        # params = signature(fn).parameters
-        # if len(params) == 1:
-        #     for name, value in params.items():
-        #         annotation = value.annotation
-        #         if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-        #             self.input_schema = annotation
-        self.type_adapter = TypeAdapter(Union[JSONRPCRequest, JSONRPCNotification])
-
-    JSONRPC_REQUEST = 1
-    JSONRPC_NOTIFICATION = 2
-    FALLBACK = 3
+        self.type_adapter = TypeAdapter(
+            Union[
+                JSONRPCRequest,
+                JSONRPCNotification,
+                Dict[str, Any],
+                BaseModel
+            ]
+        )
 
     def __call__(
             self,
             request: Union[JSONRPCRequest, JSONRPCNotification, Dict[str, Any]]
     ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse], Dict[str, Any], Iterable[Dict[str, Any]], None]:
-        if isinstance(request, Dict):
+        request = self.type_adapter.validate_python(request)
+
+        if isinstance(request, (JSONRPCRequest, JSONRPCNotification)):
             try:
-                request = self.type_adapter.validate_python(request)
-            except ValidationError:
-                pass
-
-        if isinstance(request, JSONRPCRequest):
-            mode = self.JSONRPC_REQUEST
-        elif isinstance(request, JSONRPCNotification):
-            mode = self.JSONRPC_NOTIFICATION
-        elif isinstance(request, Dict):
-            mode = self.FALLBACK
-        else:
-            raise ValueError(
-                f"Invalid request type. "
-                f"Expect JSONRPCRequest, JSONRPCNotification or dict, "
-                f"got {type(request)}."
-            )
-
-        try:
-            if mode != self.FALLBACK:
-                result = self._call_as_jsonrpc(request)
-            else:
-                result = self._call_as_fallback(request)
-        except SystemExit as e:
-            raise e
-        except KeyboardInterrupt as e:
-            raise e
-        except Exception as e:
-            if mode == self.JSONRPC_REQUEST:
+                return self._call_as_jsonrpc(request)
+            except SystemExit as e:
+                raise e
+            except KeyboardInterrupt as e:
+                raise e
+            except Exception as e:
+                if isinstance(request, JSONRPCNotification):
+                    return None
                 return JSONRPCResponse(
                     id=request.id,
                     error=JSONRPCError.from_exception(e)
                 )
-            elif mode == self.JSONRPC_NOTIFICATION:
-                return None
-            else:
-                raise e
-
-        if mode == self.JSONRPC_REQUEST:
-            if not isinstance(result, (GeneratorType, range)):
-                return (
-                    result if isinstance(result, JSONRPCResponse) else
-                    JSONRPCResponse(id=request.id, result=result)
-                )
-            else:
-                return (
-                    (item if isinstance(item, JSONRPCResponse) else
-                     JSONRPCResponse(id=request.id, result=item))
-                    for item in result
-                )
-        elif mode == self.JSONRPC_NOTIFICATION:
-            return None
         else:
-            return result
+            return self._call_as_fallback(request)
 
-    def _call_as_jsonrpc(self, request: Union[JSONRPCRequest, JSONRPCNotification]):
+        # if mode == self.JSONRPC_REQUEST:
+        #     if not isinstance(result, (GeneratorType, range)):
+        #         return (
+        #             result if isinstance(result, JSONRPCResponse) else
+        #             JSONRPCResponse(id=request.id, result=result)
+        #         )
+        #     else:
+        #         return (
+        #             (item if isinstance(item, JSONRPCResponse) else
+        #              JSONRPCResponse(id=request.id, result=item))
+        #             for item in result
+        #         )
+        # elif mode == self.JSONRPC_NOTIFICATION:
+        #     return None
+        # else:
+        #     return result
+
+    def _call_as_jsonrpc(
+            self,
+            request: Union[JSONRPCRequest, JSONRPCNotification]
+    ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse], None]:
         input_model = self.api_signature.input_model
         if input_model is not None:
             if issubclass(input_model, (JSONRPCResponse, JSONRPCNotification)):
                 arg = input_model.model_validate(request.model_dump())
-                return self.fn(arg)
+                result = self.fn(arg)
             else:
                 arg = input_model.model_validate(request.params or {})
-                return self.fn(arg)
+                result = self.fn(arg)
         else:
             bundled_model = self.api_signature.bundled_model
             kwargs = bundled_model.model_validate(request.params or {}).model_dump()
-            return self.fn(**kwargs)
+            result = self.fn(**kwargs)
 
-    def _call_as_fallback(self, request: Dict[str, Any]):
+        if isinstance(request, JSONRPCNotification):
+            return None
+
+        if not isinstance(result, (GeneratorType, range)):
+            return (
+                result if isinstance(result, JSONRPCResponse) else
+                JSONRPCResponse(id=request.id, result=result)
+            )
+        else:
+            return (
+                (item if isinstance(item, JSONRPCResponse) else
+                 JSONRPCResponse(id=request.id, result=item))
+                for item in result
+            )
+
+    def _call_as_fallback(self, request: Union[Dict[str, Any], BaseModel]):
+        if isinstance(request, BaseModel):
+            request = request.model_dump()
+
         input_model = self.api_signature.input_model
         if input_model is not None:
             arg = input_model.model_validate(request or {})
@@ -287,9 +284,15 @@ class FlaskHandler:
             yield "\n"
 
 
-class SSEMixIn:
+class SSEService:
 
-    def __init__(self):
+    def __init__(
+            self,
+            service_routes: Dict[str, "Route"],
+            builtin_routes: Dict[str, "Route"]
+    ):
+        self.service_routes = service_routes
+        self.builtin_routes = builtin_routes
         self.lock = Lock()
         self.sse_dict = {}
 
@@ -310,7 +313,8 @@ class SSEMixIn:
                             break
                         yield SSE(event="message", data=message)
                     except Empty:
-                        yield SSE(event="message", data=JSONRPCRequest(id=0, method="ping"))
+                        ping_request = JSONRPCRequest(jsonrpc="2.0", id=str(uuid.uuid4()), method="ping")
+                        yield SSE(event="message", data=ping_request)
             finally:
                 with self.lock:
                     del self.sse_dict[session_id]
@@ -341,9 +345,7 @@ class SSEMixIn:
         # call the mcp method
         ################################################################################
         path = "/" + mcp_request.method
-        service_routes: Dict[str, Route] = getattr(self, "service_routes")
-        internal_routes: Dict[str, Route] = getattr(self, "internal_routes")
-        route = service_routes.get(path, internal_routes.get(path))
+        route = self.service_routes.get(path, self.builtin_routes.get(path))
         if route is None:
             raise RuntimeError(f"Method {mcp_request.method} doesn't exist.")
 
@@ -363,7 +365,7 @@ class SSEMixIn:
             queue.put(response)
 
 
-class LifeCycleMixIn:
+class LifeCycleService:
 
     @api.route()
     def live(self):
@@ -378,17 +380,17 @@ class LifeCycleMixIn:
         )
 
 
-class NotificationsMixIn:
+class NotificationsService:
 
     @api.route("/notifications/initialized")
     def notifications_initialized(self):
         pass
 
 
-class ToolsMixIn:
+class ToolsService:
 
-    def __init__(self):
-        self.service_routes: Dict[str, Route] = {}
+    def __init__(self, service_routes: Dict[str, "Route"]):
+        self.service_routes = service_routes
 
     @api.route("/tools/list")
     def tools_list(self) -> ListToolsResult:
@@ -431,24 +433,24 @@ class ToolsMixIn:
                 isError=True
             )
 
-        rpc_fn = route.handler.fn
         rpc_request = JSONRPCRequest(
+            jsonrpc="2.0",
             id=str(uuid.uuid4()),
             method=params.name,
             params=params.arguments
         )
-        rpc_response = rpc_fn(rpc_request)
+        rpc_response = route.handler.fn(rpc_request)
 
         if rpc_response.result is not None:
             result = rpc_response.result
-            text = json.dumps(result) if isinstance(result, Dict) else str(result)
+            text = json.dumps(result) if isinstance(result, (Dict, BaseModel)) else str(result)
             return CallToolResult(
                 content=[TextContent(text=text)],
                 isError=False
             )
         elif rpc_response.error is not None:
             error = rpc_response.error
-            text = json.dumps(error) if isinstance(error, Dict) else str(error)
+            text = json.dumps(error) if isinstance(error, (Dict, BaseModel)) else str(error)
             return CallToolResult(
                 content=[TextContent(text=text)],
                 isError=True
@@ -460,10 +462,10 @@ class ToolsMixIn:
             )
 
 
-class ResourcesMinIn:
+class ResourcesService:
 
-    def __init__(self):
-        self.service_routes: Dict[str, Route] = {}
+    def __init__(self, service_routes: Dict[str, "Route"]):
+        self.service_routes = service_routes
 
     @api.route("/resources/list")
     def resources_list(self) -> ListResourcesResult:
@@ -521,22 +523,40 @@ class Route:
     handler: FlaskHandler
 
 
-class FlaskServer(Flask, SSEMixIn, LifeCycleMixIn, NotificationsMixIn, ToolsMixIn, ResourcesMinIn):
+class FlaskServer(Flask):
 
     def __init__(self, service):
-        Flask.__init__(self, __name__)
-        SSEMixIn.__init__(self)
-        LifeCycleMixIn.__init__(self)
-        NotificationsMixIn.__init__(self)
-        ToolsMixIn.__init__(self)
-        ResourcesMinIn.__init__(self)
+        super().__init__(__name__)
+
+        self.service_routes = {}
+        self.builtin_routes = {}
 
         self.service = service
+        self.builtin_services = [
+            SSEService(self.service_routes, self.builtin_routes),
+            LifeCycleService(),
+            NotificationsService(),
+            ToolsService(self.service_routes),
+            ResourcesService(self.service_routes)
+        ]
 
         logger.info("Initializing Flask application.")
-        self.service_routes = self._create_routes(self.service)
-        self.internal_routes = self._create_routes(self, self.service_routes)
-        for route in (*self.service_routes.values(), *self.internal_routes.values()):
+        existing_routes = {}
+
+        routes = self._create_routes(self.service)
+        self.service_routes.update(routes)
+        existing_routes.update(self.service_routes)
+
+        for builtin_service in self.builtin_services:
+            routes = self._create_routes(builtin_service, existing_routes)
+            self.builtin_routes.update(routes)
+            existing_routes.update(routes)
+
+        routes = self._create_routes(self, existing_routes)
+        self.builtin_routes.update(routes)
+        existing_routes.update(routes)
+
+        for route in (*self.service_routes.values(), *self.builtin_routes.values()):
             self.route(route.api_info.path, methods=route.api_info.methods)(route.handler)
         logger.info("Flask application initialized.")
 
