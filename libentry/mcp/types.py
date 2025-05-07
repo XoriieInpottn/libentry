@@ -62,13 +62,17 @@ class JSONRPCRequest(BaseModel):
     jsonrpc: Literal["2.0"]
     id: Union[str, int]
     method: str
-    params: Optional[Dict[str, Any]] = None
+    params: Union[Dict[str, Any], None] = None
+
+    model_config = ConfigDict(extra="allow")
 
 
 class JSONRPCNotification(BaseModel):
     jsonrpc: Literal["2.0"]
     method: str
-    params: Optional[Dict[str, Any]] = None
+    params: Union[Dict[str, Any], None] = None
+
+    model_config = ConfigDict(extra="allow")
 
 
 class JSONRPCError(BaseModel):
@@ -99,6 +103,8 @@ class JSONRPCResponse(BaseModel):
     id: Union[str, int]
     result: Optional[Any] = None
     error: Optional[JSONRPCError] = None
+
+    model_config = ConfigDict(extra="allow")
 
 
 class ServiceError(RuntimeError):
@@ -305,8 +311,8 @@ class ToolAnnotations(BaseModel):
 
 
 class ToolProperty(BaseModel):
-    type: Optional[str]
-    description: Optional[str]
+    type: Optional[str] = None
+    description: Optional[str] = None
 
 
 class ToolSchema(BaseModel):

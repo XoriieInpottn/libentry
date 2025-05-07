@@ -2,6 +2,7 @@
 
 __author__ = "xi"
 
+import abc
 import uuid
 from queue import Queue
 from threading import Semaphore, Thread
@@ -13,8 +14,10 @@ import httpx
 from pydantic import TypeAdapter
 
 from libentry import json
-from libentry.mcp.types import JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, JSONRequest, JSONResponse, MIME, \
-    SSE, ServiceError, _JSONRequest
+from libentry.mcp.types import CallToolRequestParams, CallToolResult, ClientCapabilities, Implementation, \
+    InitializeRequestParams, InitializeResult, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, JSONRequest, \
+    JSONResponse, ListResourcesResult, ListToolsResult, MIME, ReadResourceRequestParams, ReadResourceResult, SSE, \
+    ServiceError, _JSONRequest
 
 
 class SSEDecoder:
@@ -75,7 +78,86 @@ class SSEDecoder:
         return None
 
 
-class APIClient:
+class AbstractMCPClient(abc.ABC):
+
+    @abc.abstractmethod
+    def rpc_request(
+            self,
+            request: JSONRPCRequest,
+            path: Optional[str] = None
+    ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse]]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def rpc_notify(self, request: JSONRPCNotification, path: Optional[str] = None) -> None:
+        raise NotImplementedError()
+
+    def initialize(self) -> InitializeResult:
+        response = self.rpc_request(JSONRPCRequest(
+            jsonrpc="2.0",
+            id=str(uuid.uuid4()),
+            method="initialize",
+            params=InitializeRequestParams(
+                protocolVersion="2024-11-05",
+                capabilities=ClientCapabilities(),
+                clientInfo=Implementation(name="libentry-client", version="1.0.0")
+            ).model_dump(exclude_none=True)
+        ))
+        if response.error is not None:
+            raise ServiceError.from_rpc_error(response.error)
+
+        self.rpc_notify(JSONRPCNotification(
+            jsonrpc="2.0", method="notifications/initialized"
+        ))
+        return InitializeResult.model_validate(response.result)
+
+    def list_tools(self) -> ListToolsResult:
+        response = self.rpc_request(JSONRPCRequest(
+            jsonrpc="2.0",
+            id=str(uuid.uuid4()),
+            method="tools/list"
+        ))
+        if response.error is not None:
+            raise ServiceError.from_rpc_error(response.error)
+        return ListToolsResult.model_validate(response.result)
+
+    def call_tool(self, name: str, arguments: Dict[str, Any]) -> CallToolResult:
+        response = self.rpc_request(JSONRPCRequest(
+            jsonrpc="2.0",
+            id=str(uuid.uuid4()),
+            method="tools/call",
+            params=CallToolRequestParams(
+                name=name,
+                arguments=arguments
+            ).model_dump()
+        ))
+        if response.error is not None:
+            raise ServiceError.from_rpc_error(response.error)
+        return CallToolResult.model_validate(response.result)
+
+    def list_resources(self) -> ListResourcesResult:
+        response = self.rpc_request(JSONRPCRequest(
+            jsonrpc="2.0",
+            id=str(uuid.uuid4()),
+            method="resources/list"
+        ))
+        if response.error is not None:
+            raise ServiceError.from_rpc_error(response.error)
+        return ListResourcesResult.model_validate(response.result)
+
+    def read_resource(self, uri: str) -> ReadResourceResult:
+        response = self.rpc_request(JSONRPCRequest(
+            jsonrpc="2.0",
+            id=str(uuid.uuid4()),
+            method="resources/read",
+            params=ReadResourceRequestParams(uri=uri).model_dump()
+        ))
+        if response.error is not None:
+            raise ServiceError.from_rpc_error(response.error)
+        return ReadResourceResult.model_validate(response.result)
+
+
+class APIClient(AbstractMCPClient):
 
     def __init__(
             self,
@@ -196,7 +278,8 @@ class APIClient:
             if resp_mime is None or resp_mime == MIME.plain.value:
                 content = self._read_content(httpx_response)
             elif resp_mime == MIME.json.value:
-                content = json.loads(self._read_content(httpx_response))
+                content = self._read_content(httpx_response)
+                content = json.loads(content) if content else None
             else:
                 raise RuntimeError(f"Unsupported response MIME: \"{resp_mime}\".")
         else:
@@ -274,8 +357,14 @@ class APIClient:
             json_obj = json.loads(sse.data)
             yield JSONRPCResponse.model_validate(json_obj)
 
+    def rpc_notify(self, request: JSONRPCNotification, path: Optional[str] = None) -> None:
+        pass
 
-class SSESession:
+    def start_session(self, sse_endpoint: str = "/sse"):
+        return SSESession(self, sse_endpoint=sse_endpoint)
+
+
+class SSESession(AbstractMCPClient):
 
     def __init__(self, client: APIClient, sse_endpoint: str = "/sse"):
         self.client = client
@@ -330,16 +419,17 @@ class SSESession:
         if pending is not None:
             pending.put(response)
 
-    def rpc_request(self, request: JSONRPCRequest) -> JSONRPCResponse:
+    def rpc_request(self, request: JSONRPCRequest, path: Optional[str] = None) -> JSONRPCResponse:
         with self.lock:
-            endpoint = self.endpoint
+            if path is None:
+                path = self.endpoint
             assert request.id not in self.pendings
             pending = Queue(8)
             self.pendings[request.id] = pending
 
         self.client.request(JSONRequest(
             method="POST",
-            path=endpoint,
+            path=path,
             json_obj=request.model_dump(),
             stream=False
         ))
@@ -355,23 +445,14 @@ class SSESession:
             )
         return response
 
-    def rpc_notify(self, request: JSONRPCNotification):
-        with self.lock:
-            endpoint = self.endpoint
+    def rpc_notify(self, request: JSONRPCNotification, path: Optional[str] = None) -> None:
+        if path is None:
+            with self.lock:
+                path = self.endpoint
 
         self.client.request(JSONRequest(
             method="POST",
-            path=endpoint,
+            path=path,
             json_obj=request.model_dump(),
             stream=False
         ))
-
-    def initialize(self):
-        params = {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "libentry-client", "version": "1.0.0"}
-        }
-        response = self.rpc_request(JSONRPCRequest(method="initialize", id=str(uuid.uuid4()), params=params))
-        print(response.result)
-        self.rpc_notify(JSONRPCNotification(method="notifications/initialized"))
