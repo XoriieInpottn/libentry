@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from queue import Empty, Queue
 from threading import Lock
 from types import GeneratorType
-from typing import Any, Callable, Dict, Iterable, List, Optional, Type, Union
+from typing import Any, Callable, Dict, Generator, Iterable, List, Optional, Type, Union
 
 from flask import Flask, request as flask_request
 from pydantic import BaseModel, TypeAdapter
@@ -58,9 +58,8 @@ class JSONRPCAdapter:
             Union[
                 JSONRPCRequest,
                 JSONRPCNotification,
-                Dict[str, Any],
-                BaseModel
-            ]
+                Dict[str, Any]
+            ]  # todo: need a fallback type
         )
 
     def __call__(
@@ -85,23 +84,6 @@ class JSONRPCAdapter:
                 )
         else:
             return self._call_as_fallback(request)
-
-        # if mode == self.JSONRPC_REQUEST:
-        #     if not isinstance(result, (GeneratorType, range)):
-        #         return (
-        #             result if isinstance(result, JSONRPCResponse) else
-        #             JSONRPCResponse(id=request.id, result=result)
-        #         )
-        #     else:
-        #         return (
-        #             (item if isinstance(item, JSONRPCResponse) else
-        #              JSONRPCResponse(id=request.id, result=item))
-        #             for item in result
-        #         )
-        # elif mode == self.JSONRPC_NOTIFICATION:
-        #     return None
-        # else:
-        #     return result
 
     def _call_as_jsonrpc(
             self,
@@ -129,11 +111,33 @@ class JSONRPCAdapter:
                 JSONRPCResponse(id=request.id, result=result)
             )
         else:
-            return (
-                (item if isinstance(item, JSONRPCResponse) else
-                 JSONRPCResponse(id=request.id, result=item))
-                for item in result
-            )
+            return self._iter_jsonrpc_response(request, result)
+
+    @staticmethod
+    def _iter_jsonrpc_response(
+            request: JSONRPCRequest,
+            results: Iterable[Any]
+    ) -> Generator[JSONRPCResponse, None, Optional[JSONRPCResponse]]:
+        it = iter(results)
+        while True:
+            try:
+                result = next(it)
+                if not isinstance(result, JSONRPCResponse):
+                    result = JSONRPCResponse(
+                        jsonrpc="2.0",
+                        id=request.id,
+                        result=result
+                    )
+                yield result
+            except StopIteration as e:
+                final_result = e.value
+                if not isinstance(final_result, JSONRPCResponse):
+                    final_result = JSONRPCResponse(
+                        jsonrpc="2.0",
+                        id=request.id,
+                        result=final_result
+                    )
+                return final_result
 
     def _call_as_fallback(self, request: Union[Dict[str, Any], BaseModel]):
         if isinstance(request, BaseModel):
@@ -339,7 +343,6 @@ class SSEService:
         ################################################################################
         type_adapter = TypeAdapter(Union[JSONRPCRequest, JSONRPCNotification])
         mcp_request = type_adapter.validate_python(request)
-        print("/message", mcp_request)
 
         ################################################################################
         # call the mcp method
@@ -354,15 +357,34 @@ class SSEService:
         ################################################################################
         # put response
         ################################################################################
+        if isinstance(mcp_request, JSONRPCNotification):
+            return None
+
         with self.lock:
             queue = self.sse_dict[session_id]
 
+        # todo: remove debug info
+        print("/message")
+        print(mcp_request)
         print(response)
-        if isinstance(response, (GeneratorType, range)):
-            for item in response:
-                queue.put(item)
-        elif response is not None:
+        print()
+
+        if not isinstance(response, (GeneratorType, range)):
             queue.put(response)
+        else:
+            it = iter(response)
+            while True:
+                try:
+                    next(it)
+                except StopIteration as e:
+                    final_response = e.value
+                    break
+            if final_response is None:
+                # todo: is it better to return a JSONRPCResponse with error?
+                raise RuntimeError("Stream output is not supported.")
+
+            queue.put(final_response)
+        return None
 
 
 class LifeCycleService:
@@ -420,7 +442,7 @@ class ToolsService:
         return ListToolsResult(tools=tools)
 
     @api.route("/tools/call")
-    def tools_call(self, params: CallToolRequestParams) -> CallToolResult:
+    def tools_call(self, params: CallToolRequestParams) -> Union[CallToolResult, Iterable[CallToolResult]]:
         route = self.service_routes.get(f"/{params.name}")
         if route is None:
             return CallToolResult(
@@ -441,25 +463,50 @@ class ToolsService:
         )
         rpc_response = route.handler.fn(rpc_request)
 
-        if rpc_response.result is not None:
-            result = rpc_response.result
-            text = json.dumps(result) if isinstance(result, (Dict, BaseModel)) else str(result)
-            return CallToolResult(
-                content=[TextContent(text=text)],
-                isError=False
-            )
-        elif rpc_response.error is not None:
-            error = rpc_response.error
-            text = json.dumps(error) if isinstance(error, (Dict, BaseModel)) else str(error)
-            return CallToolResult(
-                content=[TextContent(text=text)],
-                isError=True
-            )
+        if not isinstance(rpc_response, GeneratorType):
+            if rpc_response.error is not None:
+                error = rpc_response.error
+                text = json.dumps(error) if isinstance(error, (Dict, BaseModel)) else str(error)
+                return CallToolResult(
+                    content=[TextContent(text=text)],
+                    isError=True
+                )
+            else:
+                result = rpc_response.result
+                text = json.dumps(result) if isinstance(result, (Dict, BaseModel)) else str(result)
+                return CallToolResult(
+                    content=[TextContent(text=text)],
+                    isError=False
+                )
         else:
-            return CallToolResult(
-                content=[TextContent(text="Unknown error.")],
-                isError=True
-            )
+            return self._iter_tool_result(rpc_response)
+
+    @staticmethod
+    def _iter_tool_result(
+            response: Iterable[JSONRPCResponse]
+    ) -> Generator[CallToolResult, None, CallToolResult]:
+        text_list = []
+        # todo: add an error list?
+        for item in response:
+            if item.error is not None:
+                error = item.error
+                text = json.dumps(error) if isinstance(error, (Dict, BaseModel)) else str(error)
+                yield CallToolResult(
+                    content=[TextContent(text=text)],
+                    isError=True
+                )
+            else:
+                result = item.result
+                text = json.dumps(result) if isinstance(result, (Dict, BaseModel)) else str(result)
+                text_list.append(text)
+                yield CallToolResult(
+                    content=[TextContent(text=text)],
+                    isError=False
+                )
+        return CallToolResult(
+            content=[TextContent(text="".join(text_list))],
+            isError=False
+        )
 
 
 class ResourcesService:
@@ -485,7 +532,11 @@ class ResourcesService:
         return ListResourcesResult(resources=resources)
 
     @api.route("/resources/read")
-    def resources_read(self, request: ReadResourceRequestParams) -> ReadResourceResult:
+    def resources_read(
+            self,
+            request: ReadResourceRequestParams
+    ) -> Union[ReadResourceResult, Iterable[ReadResourceResult]]:
+        # todo: optimize the way of finding the resource route
         for route in self.service_routes.values():
             api_info = route.api_info
             if api_info.tag != "resource":
@@ -495,25 +546,74 @@ class ResourcesService:
                 continue
             result = ReadResourceResult(contents=[])
             content = route.fn()
+            if not isinstance(content, GeneratorType):
+                if isinstance(content, str):
+                    mime_type = api_info.model_extra.get("mimeType", "text/*")
+                    result.contents.append(TextResourceContents(
+                        uri=uri,
+                        mimeType=mime_type,
+                        text=content
+                    ))
+                elif isinstance(content, bytes):
+                    mime_type = api_info.model_extra.get("mimeType", "binary/*")
+                    result.contents.append(BlobResourceContents(
+                        uri=uri,
+                        mimeType=mime_type,
+                        blob=base64.b64encode(content).decode()
+                    ))
+                else:
+                    raise RuntimeError(f"Unsupported content type \"{type(content)}\".")
+                return result
+            else:
+                # todo: this branch is not tested yet
+                return self._iter_resource_result(content, uri, api_info)
+
+        raise RuntimeError(f"Resource \"{request.uri}\" doesn't exist.")
+
+    @staticmethod
+    def _iter_resource_result(
+            contents: Iterable[Union[str, bytes]],
+            uri: str,
+            api_info: APIInfo
+    ) -> Generator[ReadResourceResult, None, Optional[ReadResourceResult]]:
+        final_results = []
+        for content in contents:
             if isinstance(content, str):
                 mime_type = api_info.model_extra.get("mimeType", "text/*")
-                result.contents.append(TextResourceContents(
+                yield ReadResourceResult(contents=[TextResourceContents(
                     uri=uri,
                     mimeType=mime_type,
                     text=content
-                ))
+                )])
+                final_results.append(content)
             elif isinstance(content, bytes):
                 mime_type = api_info.model_extra.get("mimeType", "binary/*")
-                result.contents.append(BlobResourceContents(
+                yield ReadResourceResult(contents=[BlobResourceContents(
                     uri=uri,
                     mimeType=mime_type,
                     blob=base64.b64encode(content).decode()
-                ))
+                )])
+                final_results.append(content)
             else:
                 raise RuntimeError(f"Unsupported content type \"{type(content)}\".")
-            return result
 
-        raise RuntimeError(f"Resource \"{request.uri}\" doesn't exist.")
+        if len(final_results) == 0:
+            return None
+
+        if isinstance(final_results[0], str):
+            mime_type = api_info.model_extra.get("mimeType", "text/*")
+            return ReadResourceResult(contents=[TextResourceContents(
+                uri=uri,
+                mimeType=mime_type,
+                text="".join(final_results)
+            )])
+        else:
+            mime_type = api_info.model_extra.get("mimeType", "binary/*")
+            return ReadResourceResult(contents=[BlobResourceContents(
+                uri=uri,
+                mimeType=mime_type,
+                blob=base64.b64encode(b"".join(final_results)).decode()
+            )])
 
 
 @dataclass
