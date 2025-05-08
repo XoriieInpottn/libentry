@@ -6,7 +6,7 @@ import traceback
 from enum import Enum
 from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class MIME(Enum):
@@ -22,24 +22,47 @@ class MIME(Enum):
     sse = "text/event-stream"
 
 
-class _JSONRequest(BaseModel):
-    """JSON request for a single trial"""
+class SubroutineError(BaseModel):
+    error: str
+    message: str
+    traceback: str
 
-    method: Literal["GET", "POST"]
-    path: str
-    json_obj: Optional[Dict[str, Any]] = None
+    @classmethod
+    def from_exception(cls, e):
+        err_cls = e.__class__
+        err_name = err_cls.__name__
+        module = err_cls.__module__
+        if module != "builtins":
+            err_name = f"{module}.{err_name}"
+        return cls(
+            error=err_name,
+            message=str(e),
+            traceback=traceback.format_exc()
+        )
+
+
+class SubroutineResponse(BaseModel):
+    result: Optional[Any] = None
+    error: Optional[SubroutineError] = None
+
+
+class HTTPOptions(BaseModel):
+    method: Literal["GET", "POST"] = "POST"
     headers: Optional[Dict[str, str]] = None
     stream: Optional[bool] = None
     timeout: int = 15
-
-
-class JSONRequest(_JSONRequest):
-    """JSON request for multiple trials"""
-
     num_trials: int = 5
     interval: float = 1
     retry_factor: float = 0.5
     on_error: Optional[Callable[[Exception], None]] = None
+
+
+class HTTPRequest(BaseModel):
+    """HTTP request for a single trial"""
+
+    path: str
+    json_obj: Optional[Dict[str, Any]] = None
+    options: HTTPOptions = Field(default_factory=HTTPOptions)
 
 
 class SSE(BaseModel):
@@ -49,8 +72,8 @@ class SSE(BaseModel):
     data: Optional[Any] = None
 
 
-class JSONResponse(BaseModel):
-    """JSON response"""
+class HTTPResponse(BaseModel):
+    """HTTP response"""
 
     status_code: int
     headers: Dict[str, str]

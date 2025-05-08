@@ -4,6 +4,7 @@ __author__ = "xi"
 
 import asyncio
 import base64
+import traceback
 import uuid
 from dataclasses import dataclass
 from queue import Empty, Queue
@@ -18,11 +19,11 @@ from libentry import json, logger
 from libentry.mcp import api
 from libentry.mcp.api import APIInfo, list_api_info
 from libentry.mcp.types import BlobResourceContents, CallToolRequestParams, CallToolResult, Implementation, \
-    InitializeRequestParams, \
-    InitializeResult, JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, ListResourcesResult, \
-    ListToolsResult, MIME, ReadResourceRequestParams, ReadResourceResult, Resource, SSE, \
-    ServerCapabilities, TextContent, TextResourceContents, Tool, ToolProperty, ToolSchema, ToolsCapability
-from libentry.schema import get_api_signature, query_api
+    InitializeRequestParams, InitializeResult, JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, \
+    ListResourcesResult, ListToolsResult, MIME, ReadResourceRequestParams, ReadResourceResult, Resource, SSE, \
+    ServerCapabilities, SubroutineError, SubroutineResponse, TextContent, TextResourceContents, Tool, ToolProperty, \
+    ToolSchema, ToolsCapability
+from libentry.schema import APISignature, get_api_signature, query_api
 
 try:
     from gunicorn.app.base import BaseApplication
@@ -45,78 +46,147 @@ except ImportError:
             return flask_server.run(host=host, port=port)
 
 
-class JSONRPCAdapter:
+def dump_error(e: Exception) -> Dict[str, str]:
+    err_cls = e.__class__
+    err_name = err_cls.__name__
+    module = err_cls.__module__
+    if module != "builtins":
+        err_name = f"{module}.{err_name}"
+    return {
+        "error": err_name,
+        "message": str(e),
+        "traceback": traceback.format_exc()
+    }
 
-    def __init__(self, fn: Callable):
+
+class SubroutineAdapter:
+
+    def __init__(self, fn: Callable, api_signature: Optional[APISignature] = None):
         self.fn = fn
         assert hasattr(fn, "__name__")
         self.__name__ = fn.__name__
 
-        self.api_signature = get_api_signature(fn)
+        self.api_signature = api_signature or get_api_signature(fn)
 
-        self.type_adapter = TypeAdapter(
-            Union[
-                JSONRPCRequest,
-                JSONRPCNotification,
-                Dict[str, Any]
-            ]  # todo: need a fallback type
-        )
+    def __call__(
+            self,
+            request: Dict[str, Any]
+    ) -> Union[SubroutineResponse, Iterable[SubroutineResponse]]:
+        if isinstance(request, BaseModel):
+            request = request.model_dump()
+
+        try:
+            input_model = self.api_signature.input_model
+            if input_model is not None:
+                # This is the special case: the only one argument is a BaseModel object.
+                # In this case, we omit this argument name, and validate directly.
+                arg = input_model.model_validate(request or {})
+                response = self.fn(arg)
+            else:
+                # The arguments are bundled together to perform validation.
+                bundled_model = self.api_signature.bundled_model
+                kwargs = bundled_model.model_validate(request or {}).model_dump()
+                response = self.fn(**kwargs)
+        except Exception as e:
+            return SubroutineResponse(error=SubroutineError.from_exception(e))
+
+        if not isinstance(response, GeneratorType):
+            return SubroutineResponse(result=response)
+        else:
+            return self._iter_response(response)
+
+    @staticmethod
+    def _iter_response(
+            results: Iterable[Any]
+    ) -> Generator[SubroutineResponse, None, Optional[SubroutineResponse]]:
+        it = iter(results)
+        while True:
+            try:
+                result = next(it)
+                if not isinstance(result, SubroutineResponse):
+                    result = SubroutineResponse(result=result)
+                yield result
+            except StopIteration as e:
+                final_result = e.value
+                if not isinstance(final_result, SubroutineResponse):
+                    final_result = SubroutineResponse(result=final_result)
+                break
+            except Exception as e:
+                final_result = SubroutineResponse(error=SubroutineError.from_exception(e))
+                yield final_result
+                break
+        return final_result
+
+
+class JSONRPCAdapter:
+
+    def __init__(self, fn: Callable, api_signature: Optional[APISignature] = None):
+        self.fn = fn
+        assert hasattr(fn, "__name__")
+        self.__name__ = fn.__name__
+
+        self.api_signature = api_signature or get_api_signature(fn)
+        self.type_adapter = TypeAdapter(Union[JSONRPCRequest, JSONRPCNotification])
 
     def __call__(
             self,
             request: Union[JSONRPCRequest, JSONRPCNotification, Dict[str, Any]]
-    ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse], Dict[str, Any], Iterable[Dict[str, Any]], None]:
-        request = self.type_adapter.validate_python(request)
+    ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse], None]:
+        if isinstance(request, Dict):
+            request = self.type_adapter.validate_python(request)
 
-        if isinstance(request, (JSONRPCRequest, JSONRPCNotification)):
-            try:
-                return self._call_as_jsonrpc(request)
-            except SystemExit as e:
-                raise e
-            except KeyboardInterrupt as e:
-                raise e
-            except Exception as e:
-                if isinstance(request, JSONRPCNotification):
-                    return None
+        try:
+            if isinstance(request, JSONRPCRequest):
+                return self._apply_request(request)
+            else:
+                return self._apply_notification(request)
+        except SystemExit as e:
+            raise e
+        except KeyboardInterrupt as e:
+            raise e
+        except Exception as e:
+            if isinstance(request, JSONRPCRequest):
                 return JSONRPCResponse(
                     id=request.id,
                     error=JSONRPCError.from_exception(e)
                 )
-        else:
-            return self._call_as_fallback(request)
+            else:
+                return None
 
-    def _call_as_jsonrpc(
+    def _apply_request(
             self,
-            request: Union[JSONRPCRequest, JSONRPCNotification]
-    ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse], None]:
+            request: JSONRPCRequest
+    ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse]]:
         input_model = self.api_signature.input_model
         if input_model is not None:
-            if issubclass(input_model, (JSONRPCResponse, JSONRPCNotification)):
-                arg = input_model.model_validate(request.model_dump())
-                result = self.fn(arg)
-            else:
-                arg = input_model.model_validate(request.params or {})
-                result = self.fn(arg)
+            arg = input_model.model_validate(request.params or {})
+            result = self.fn(arg)
         else:
             bundled_model = self.api_signature.bundled_model
             kwargs = bundled_model.model_validate(request.params or {}).model_dump()
             result = self.fn(**kwargs)
 
-        if isinstance(request, JSONRPCNotification):
-            return None
-
         if not isinstance(result, (GeneratorType, range)):
-            return (
-                result if isinstance(result, JSONRPCResponse) else
-                JSONRPCResponse(id=request.id, result=result)
-            )
+            if isinstance(result, JSONRPCResponse):
+                response = result
+            else:
+                response = JSONRPCResponse(
+                    jsonrpc="2.0",
+                    id=request.id,
+                    result=result
+                )
         else:
-            return self._iter_jsonrpc_response(request, result)
+            response = self._iter_response(
+                results=result,
+                request_id=request.id
+            )
+
+        return response
 
     @staticmethod
-    def _iter_jsonrpc_response(
-            request: JSONRPCRequest,
-            results: Iterable[Any]
+    def _iter_response(
+            results: Iterable[Any],
+            request_id: Union[int, str]
     ) -> Generator[JSONRPCResponse, None, Optional[JSONRPCResponse]]:
         it = iter(results)
         while True:
@@ -125,7 +195,7 @@ class JSONRPCAdapter:
                 if not isinstance(result, JSONRPCResponse):
                     result = JSONRPCResponse(
                         jsonrpc="2.0",
-                        id=request.id,
+                        id=request_id,
                         result=result
                     )
                 yield result
@@ -134,50 +204,59 @@ class JSONRPCAdapter:
                 if not isinstance(final_result, JSONRPCResponse):
                     final_result = JSONRPCResponse(
                         jsonrpc="2.0",
-                        id=request.id,
+                        id=request_id,
                         result=final_result
                     )
-                return final_result
+                break
+            except Exception as e:
+                final_result = JSONRPCResponse(
+                    jsonrpc="2.0",
+                    id=request_id,
+                    error=JSONRPCError.from_exception(e)
+                )
+                yield final_result
+                break
+        return final_result
 
-    def _call_as_fallback(self, request: Union[Dict[str, Any], BaseModel]):
-        if isinstance(request, BaseModel):
-            request = request.model_dump()
-
+    def _apply_notification(self, request: JSONRPCNotification) -> None:
         input_model = self.api_signature.input_model
         if input_model is not None:
-            arg = input_model.model_validate(request or {})
-            return self.fn(arg)
+            arg = input_model.model_validate(request.params or {})
+            self.fn(arg)
         else:
             bundled_model = self.api_signature.bundled_model
-            kwargs = bundled_model.model_validate(request or {}).model_dump()
-            return self.fn(**kwargs)
+            kwargs = bundled_model.model_validate(request.params or {}).model_dump()
+            self.fn(**kwargs)
 
-        # if issubclass(self.input_schema, (JSONRPCResponse, JSONRPCNotification)):
-        #     raw_params = self.input_schema.model_validate(request.model_dump())
-        #     return self.fn(raw_params)
-        # elif issubclass(self.input_schema, BaseModel):
-        #     # Note that "input_schema is not None" means:
-        #     # (1) The function has only one argument;
-        #     # (2) The arguments is a BaseModel.
-        #     # In this case, the request data can be directly validated as a "BaseModel" and
-        #     # subsequently passed to the function as a single object.
-        #     pydantic_params = self.input_schema.model_validate(request.params or {})
-        #     return self.fn(pydantic_params)
-        # else:
-        #     # The function has multiple arguments, and the request data bundle them as a single object.
-        #     # So, they should be unpacked before pass to the function.
-        #     kwargs = request.params or {}
-        #     return self.fn(**kwargs)
+        return None
 
 
 class FlaskHandler:
 
     def __init__(self, fn: Callable, api_info: APIInfo, app: "FlaskServer"):
-        self.fn = fn if api_info.tag == "schema_free" else JSONRPCAdapter(fn)
-        self.api_info = api_info
-        self.app = app
         assert hasattr(fn, "__name__")
         self.__name__ = fn.__name__
+
+        self.fn = fn
+        self.api_info = api_info
+        self.app = app
+
+        self.api_signature = get_api_signature(fn)
+
+        self.subroutine_adapter = SubroutineAdapter(fn, self.api_signature)
+        self.jsonrpc_adapter = JSONRPCAdapter(fn, self.api_signature)
+        self.default_adapter = self.subroutine_adapter
+
+        tag = self.api_info.tag if self.api_info else None
+        if tag is not None:
+            tag = tag.lower()
+            if tag in {"free", "schema_free", "schema-free"}:
+                self.default_adapter = self.fn
+            elif tag in {"jsonrpc", "rpc"}:
+                self.default_adapter = self.jsonrpc_adapter
+
+        # todo: debug info
+        print(f"{api_info.path}: {type(self.default_adapter)}\t{self.api_signature.input_model}")
 
     def __call__(self):
         args = flask_request.args
@@ -203,9 +282,10 @@ class FlaskHandler:
         # Call method as MCP
         ################################################################################
         try:
-            mcp_response = self.fn(input_json)
+            mcp_response = self.default_adapter(input_json)
         except Exception as e:
-            return self.app.error(str(e))
+            error = json.dumps(dump_error(e))
+            return self.app.error(error, mimetype=MIME.json.value)
 
         ################################################################################
         # Parse MCP response
@@ -300,15 +380,16 @@ class SSEService:
         self.lock = Lock()
         self.sse_dict = {}
 
+    # noinspection PyUnusedLocal
     @api.get("/sse", tag="schema_free")
-    def sse(self, _) -> Iterable[SSE]:
+    def sse(self, raw_request: Dict[str, Any]) -> Iterable[SSE]:
         session_id = str(uuid.uuid4())
         queue = Queue(8)
         with self.lock:
             self.sse_dict[session_id] = queue
 
         def _stream():
-            yield SSE(event="endpoint", data=f"/message?sessionId={session_id}")
+            yield SSE(event="endpoint", data=f"/sse/message?sessionId={session_id}")
             try:
                 while True:
                     try:
@@ -326,12 +407,12 @@ class SSEService:
 
         return _stream()
 
-    @api.route("/message", tag="schema_free")
-    def message(self, request: Dict[str, Any]) -> None:
+    @api.route("/sse/message", tag="schema_free")
+    def sse_message(self, raw_request: Dict[str, Any]) -> None:
         ################################################################################
         # session validation
         ################################################################################
-        session_id = request.get("sessionId")
+        session_id = raw_request.get("sessionId")
         if session_id is None:
             raise RuntimeError("You should start a session by request the \"/sse\" endpoint first.")
         with self.lock:
@@ -342,30 +423,30 @@ class SSEService:
         # validate request
         ################################################################################
         type_adapter = TypeAdapter(Union[JSONRPCRequest, JSONRPCNotification])
-        mcp_request = type_adapter.validate_python(request)
+        request = type_adapter.validate_python(raw_request)
 
         ################################################################################
         # call the mcp method
         ################################################################################
-        path = "/" + mcp_request.method
+        path = f"/{request.method}"
         route = self.service_routes.get(path, self.builtin_routes.get(path))
         if route is None:
-            raise RuntimeError(f"Method {mcp_request.method} doesn't exist.")
+            raise RuntimeError(f"Method {request.method} doesn't exist.")
 
-        response = route.handler.fn(mcp_request)
+        response = route.handler.jsonrpc_adapter(request)
 
         ################################################################################
         # put response
         ################################################################################
-        if isinstance(mcp_request, JSONRPCNotification):
+        if isinstance(request, JSONRPCNotification):
             return None
 
         with self.lock:
             queue = self.sse_dict[session_id]
 
         # todo: remove debug info
-        print("/message")
-        print(mcp_request)
+        print("/sse/message")
+        print(request)
         print(response)
         print()
 
@@ -373,18 +454,50 @@ class SSEService:
             queue.put(response)
         else:
             it = iter(response)
+            last_response = None
             while True:
                 try:
-                    next(it)
+                    last_response = next(it)
                 except StopIteration as e:
                     final_response = e.value
                     break
             if final_response is None:
-                # todo: is it better to return a JSONRPCResponse with error?
-                raise RuntimeError("Stream output is not supported.")
+                final_response = last_response
+
+            if final_response is None:
+                raise RuntimeError(f"Method {request.method} doesn't return anything.")
 
             queue.put(final_response)
         return None
+
+
+class JSONRPCService:
+
+    def __init__(
+            self,
+            service_routes: Dict[str, "Route"],
+            builtin_routes: Dict[str, "Route"]
+    ):
+        self.service_routes = service_routes
+        self.builtin_routes = builtin_routes
+
+        self.type_adapter = TypeAdapter(Union[JSONRPCRequest, JSONRPCNotification])
+
+    @api.route(tag="schema_free")
+    def message(self, raw_request: Dict[str, Any]) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse], None]:
+        request = self.type_adapter.validate_python(raw_request)
+        path = f"/{request.method}"
+        route = self.service_routes.get(path, self.builtin_routes.get(path))
+        if route is None:
+            if isinstance(request, JSONRPCRequest):
+                return JSONRPCResponse(
+                    jsonrpc="2.0",
+                    id=request.id,
+                    error=JSONRPCError(message=f"Method \"{request.method}\" doesn't exist.")
+                )
+            else:
+                return None
+        return route.handler.jsonrpc_adapter(request)
 
 
 class LifeCycleService:
@@ -413,14 +526,23 @@ class ToolsService:
 
     def __init__(self, service_routes: Dict[str, "Route"]):
         self.service_routes = service_routes
+        self._tool_routes = None
+
+    def get_tool_routes(self) -> Dict[str, "Route"]:
+        if self._tool_routes is None:
+            self._tool_routes = {}
+            for route in self.service_routes.values():
+                api_info = route.api_info
+                if api_info.tag != "tool":
+                    continue
+                self._tool_routes[api_info.name] = route
+        return self._tool_routes
 
     @api.route("/tools/list")
     def tools_list(self) -> ListToolsResult:
         tools = []
-        for route in self.service_routes.values():
+        for name, route in self.get_tool_routes().items():
             api_info = route.api_info
-            if api_info.tag != "tool":
-                continue
             tool = Tool(
                 name=api_info.name,
                 description=api_info.description,
@@ -443,70 +565,59 @@ class ToolsService:
 
     @api.route("/tools/call")
     def tools_call(self, params: CallToolRequestParams) -> Union[CallToolResult, Iterable[CallToolResult]]:
-        route = self.service_routes.get(f"/{params.name}")
+        route = self.get_tool_routes().get(params.name)
         if route is None:
+            raise RuntimeError(f"Tool \"{params.name}\" doesn't exist.")
+
+        try:
+            result = route.handler.subroutine_adapter(params.arguments)
+        except Exception as e:
+            error = json.dumps(dump_error(e))
             return CallToolResult(
-                content=[TextContent(text=f"Tool \"{params.name}\" doesn't exist.")],
-                isError=True
-            )
-        if route.api_info.tag != "tool":
-            return CallToolResult(
-                content=[TextContent(text=f"\"{params.name}\" is not defined as a tool.")],
+                content=[TextContent(text=error)],
                 isError=True
             )
 
-        rpc_request = JSONRPCRequest(
-            jsonrpc="2.0",
-            id=str(uuid.uuid4()),
-            method=params.name,
-            params=params.arguments
-        )
-        rpc_response = route.handler.fn(rpc_request)
-
-        if not isinstance(rpc_response, GeneratorType):
-            if rpc_response.error is not None:
-                error = rpc_response.error
-                text = json.dumps(error) if isinstance(error, (Dict, BaseModel)) else str(error)
-                return CallToolResult(
-                    content=[TextContent(text=text)],
-                    isError=True
-                )
-            else:
-                result = rpc_response.result
-                text = json.dumps(result) if isinstance(result, (Dict, BaseModel)) else str(result)
-                return CallToolResult(
-                    content=[TextContent(text=text)],
-                    isError=False
-                )
+        if not isinstance(result, GeneratorType):
+            text = json.dumps(result) if isinstance(result, (Dict, BaseModel)) else str(result)
+            return CallToolResult(
+                content=[TextContent(text=text)],
+                isError=False
+            )
         else:
-            return self._iter_tool_result(rpc_response)
+            return self._iter_tool_result(result)
 
     @staticmethod
     def _iter_tool_result(
-            response: Iterable[JSONRPCResponse]
+            results: Iterable[Any]
     ) -> Generator[CallToolResult, None, CallToolResult]:
         text_list = []
-        # todo: add an error list?
-        for item in response:
-            if item.error is not None:
-                error = item.error
-                text = json.dumps(error) if isinstance(error, (Dict, BaseModel)) else str(error)
-                yield CallToolResult(
-                    content=[TextContent(text=text)],
-                    isError=True
-                )
-            else:
-                result = item.result
+        error = None
+        try:
+            for result in results:
                 text = json.dumps(result) if isinstance(result, (Dict, BaseModel)) else str(result)
                 text_list.append(text)
                 yield CallToolResult(
                     content=[TextContent(text=text)],
                     isError=False
                 )
-        return CallToolResult(
-            content=[TextContent(text="".join(text_list))],
-            isError=False
-        )
+        except Exception as e:
+            error = json.dumps(dump_error(e))
+            yield CallToolResult(
+                content=[TextContent(text=error)],
+                isError=True
+            )
+
+        if error is None:
+            return CallToolResult(
+                content=[TextContent(text="".join(text_list))],
+                isError=False
+            )
+        else:
+            return CallToolResult(
+                content=[TextContent(text=error)],
+                isError=True
+            )
 
 
 class ResourcesService:
@@ -514,14 +625,24 @@ class ResourcesService:
     def __init__(self, service_routes: Dict[str, "Route"]):
         self.service_routes = service_routes
 
+        self._resource_routes = None
+
+    def get_resource_routes(self) -> Dict[str, "Route"]:
+        if self._resource_routes is None:
+            self._resource_routes = {}
+            for route in self.service_routes.values():
+                api_info = route.api_info
+                if api_info.tag != "resource":
+                    continue
+                uri = api_info.model_extra.get("uri", api_info.path)
+                self._resource_routes[uri] = route
+        return self._resource_routes
+
     @api.route("/resources/list")
     def resources_list(self) -> ListResourcesResult:
         resources = []
-        for route in self.service_routes.values():
+        for uri, route in self.get_resource_routes().items():
             api_info = route.api_info
-            if api_info.tag != "resource":
-                continue
-            uri = api_info.model_extra.get("uri", api_info.path)
             resources.append(Resource(
                 uri=uri,
                 name=api_info.name,
@@ -536,39 +657,34 @@ class ResourcesService:
             self,
             request: ReadResourceRequestParams
     ) -> Union[ReadResourceResult, Iterable[ReadResourceResult]]:
-        # todo: optimize the way of finding the resource route
-        for route in self.service_routes.values():
-            api_info = route.api_info
-            if api_info.tag != "resource":
-                continue
-            uri = api_info.model_extra.get("uri")
-            if uri != request.uri:
-                continue
-            result = ReadResourceResult(contents=[])
-            content = route.fn()
-            if not isinstance(content, GeneratorType):
-                if isinstance(content, str):
-                    mime_type = api_info.model_extra.get("mimeType", "text/*")
-                    result.contents.append(TextResourceContents(
-                        uri=uri,
-                        mimeType=mime_type,
-                        text=content
-                    ))
-                elif isinstance(content, bytes):
-                    mime_type = api_info.model_extra.get("mimeType", "binary/*")
-                    result.contents.append(BlobResourceContents(
-                        uri=uri,
-                        mimeType=mime_type,
-                        blob=base64.b64encode(content).decode()
-                    ))
-                else:
-                    raise RuntimeError(f"Unsupported content type \"{type(content)}\".")
-                return result
-            else:
-                # todo: this branch is not tested yet
-                return self._iter_resource_result(content, uri, api_info)
+        route = self.get_resource_routes().get(request.uri)
+        if route is None:
+            raise RuntimeError(f"Resource \"{request.uri}\" doesn't exist.")
 
-        raise RuntimeError(f"Resource \"{request.uri}\" doesn't exist.")
+        api_info = route.api_info
+        result = ReadResourceResult(contents=[])
+        content = route.fn()
+        if not isinstance(content, GeneratorType):
+            if isinstance(content, str):
+                mime_type = api_info.model_extra.get("mimeType", "text/*")
+                result.contents.append(TextResourceContents(
+                    uri=request.uri,
+                    mimeType=mime_type,
+                    text=content
+                ))
+            elif isinstance(content, bytes):
+                mime_type = api_info.model_extra.get("mimeType", "binary/*")
+                result.contents.append(BlobResourceContents(
+                    uri=request.uri,
+                    mimeType=mime_type,
+                    blob=base64.b64encode(content).decode()
+                ))
+            else:
+                raise RuntimeError(f"Unsupported content type \"{type(content)}\".")
+            return result
+        else:
+            # todo: this branch is not tested yet
+            return self._iter_resource_result(content, request.uri, api_info)
 
     @staticmethod
     def _iter_resource_result(
@@ -634,6 +750,7 @@ class FlaskServer(Flask):
         self.service = service
         self.builtin_services = [
             SSEService(self.service_routes, self.builtin_routes),
+            JSONRPCService(self.service_routes, self.builtin_routes),
             LifeCycleService(),
             NotificationsService(),
             ToolsService(self.service_routes),

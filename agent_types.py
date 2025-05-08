@@ -4,23 +4,36 @@ __author__ = "xi"
 
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SystemProfile(BaseModel):
-    role: str
-    language: str
-    capabilities: str
+    """The profile of the agent or its module."""
+
+    model_config = ConfigDict(extra="allow")
+
+    description: str
+    language: Optional[str] = None
+    capabilities: Optional[str] = None
+    constrains: Optional[str] = None
 
 
 class ChatMessage(BaseModel):
+    """Chat message."""
+
+    model_config = ConfigDict(extra="allow")
+
     role: Optional[str] = None
     content: str
 
 
 class Memory(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     user_profile: Optional[str] = None
     chat_history: Optional[List[ChatMessage]] = None
+
+
 
 
 class SystemMemory(BaseModel):
@@ -47,9 +60,15 @@ class Tool(BaseModel):
     schema: Optional[ToolSchema] = None
 
 
+class CandidateIntent(BaseModel):
+    intent: str
+    description: Optional[str] = None
+
+
 class IntentRequest(BaseModel):
     query: str
-    tools: List[Tool]
+    candidate_intents: Optional[List[CandidateIntent]] = None
+    tools: Optional[List[Tool]] = None
     memory: Optional[Memory] = None
     system_profile: Optional[SystemProfile] = None
     system_memory: Optional[SystemMemory] = None
@@ -61,9 +80,10 @@ class IntentResponse(BaseModel):
 
 
 class ToolCalling(BaseModel):
-    name: str = Field(..., description="The name of the tool to be called.")
+    name: str = Field(description="The name of the tool to be called.")
     arguments: Optional[Dict[str, Any]] = Field(
-        ..., description="A dictionary of arguments to be passed to the tool."
+        default=None,
+        description="A dictionary of arguments to be passed to the tool."
     )
 
 

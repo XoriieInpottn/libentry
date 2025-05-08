@@ -7,17 +7,18 @@ import uuid
 from queue import Queue
 from threading import Semaphore, Thread
 from time import sleep
+from types import GeneratorType
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 from urllib.parse import urlencode, urljoin
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from libentry import json
-from libentry.mcp.types import CallToolRequestParams, CallToolResult, ClientCapabilities, Implementation, \
-    InitializeRequestParams, InitializeResult, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, JSONRequest, \
-    JSONResponse, ListResourcesResult, ListToolsResult, MIME, ReadResourceRequestParams, ReadResourceResult, SSE, \
-    ServiceError, _JSONRequest
+from libentry.mcp.types import CallToolRequestParams, CallToolResult, ClientCapabilities, HTTPOptions, HTTPRequest, \
+    HTTPResponse, Implementation, InitializeRequestParams, InitializeResult, JSONRPCNotification, JSONRPCRequest, \
+    JSONRPCResponse, ListResourcesResult, ListToolsResult, MIME, ReadResourceRequestParams, ReadResourceResult, SSE, \
+    ServiceError, SubroutineResponse
 
 
 class SSEDecoder:
@@ -223,30 +224,31 @@ class APIClient(AbstractMCPClient):
             params[item[:i]] = item[i + 1:]
         return mime, params
 
-    def request(self, request: JSONRequest) -> JSONResponse:
-        single_request = request.model_copy()
+    def http_request(self, request: HTTPRequest) -> HTTPResponse:
+        options = request.options
+        timeout_value = options.timeout
         err = None
-        for i in range(request.num_trials):
-            single_request.timeout *= (1 + i * request.retry_factor)
+        for i in range(options.num_trials):
+            timeout_value *= (1 + i * options.retry_factor)
             try:
-                return self._request(single_request)
+                return self._http_request(request, timeout_value)
             except httpx.TimeoutException as e:
                 err = e
-                if callable(request.on_error):
-                    request.on_error(e)
+                if callable(options.on_error):
+                    options.on_error(e)
             except httpx.HTTPError as e:
                 err = e
-                if callable(request.on_error):
-                    request.on_error(e)
-            sleep(request.interval)
+                if callable(options.on_error):
+                    options.on_error(e)
+            sleep(options.interval)
         raise err
 
-    def _request(self, request: _JSONRequest) -> JSONResponse:
+    def _http_request(self, request: HTTPRequest, timeout: float) -> HTTPResponse:
         full_url = urljoin(self.base_url, request.path)
         headers = (
             {**self.headers}
-            if request.headers is None else
-            {**self.headers, **request.headers}
+            if request.options.headers is None else
+            {**self.headers, **request.options.headers}
         )
         req_mime, _ = self.find_content_type(headers)
         if (req_mime is None) or req_mime in {MIME.json.value, MIME.plain.value}:
@@ -257,11 +259,11 @@ class APIClient(AbstractMCPClient):
             raise ValueError(f"Unsupported request MIME: \"{req_mime}\".")
 
         httpx_request = self.client.build_request(
-            method=request.method,
+            method=request.options.method,
             url=full_url,
             content=payload,
             headers=headers,
-            timeout=request.timeout
+            timeout=timeout
         )
         httpx_response = self.client.send(httpx_request, stream=True)
 
@@ -270,7 +272,7 @@ class APIClient(AbstractMCPClient):
 
         resp_mime, _ = self.find_content_type(httpx_response.headers)
 
-        stream = request.stream
+        stream = request.options.stream
         if stream is None:
             stream = "-stream" in resp_mime
 
@@ -289,7 +291,7 @@ class APIClient(AbstractMCPClient):
                 content = self._iter_objs(self._iter_lines(httpx_response))
             else:
                 raise RuntimeError(f"Unsupported response MIME: \"{resp_mime}\".")
-        return JSONResponse(
+        return HTTPResponse(
             status_code=httpx_response.status_code,
             headers={**httpx_response.headers},
             stream=stream,
@@ -330,24 +332,56 @@ class APIClient(AbstractMCPClient):
                 continue
             yield json.loads(line)
 
+    def subroutine_request(
+            self,
+            path: str,
+            params: Dict[str, Any],
+            options: Optional[HTTPOptions] = None
+    ) -> Union[SubroutineResponse, Iterable[SubroutineResponse]]:
+        if isinstance(params, BaseModel):
+            params = params.model_dump(exclude_none=True)
+
+        json_request = HTTPRequest(
+            path=path,
+            json_obj=params,
+            options=options or HTTPOptions()
+        )
+        json_response = self.http_request(json_request)
+        if not json_response.stream:
+            return SubroutineResponse.model_validate(json_response.content)
+        else:
+            return self._iter_subroutine_response(json_response)
+
+    @staticmethod
+    def _iter_subroutine_response(response: HTTPResponse) -> Iterable[SubroutineResponse]:
+        for sse in response.content:
+            assert isinstance(sse, SSE)
+            if sse.event != "message":
+                continue
+            if not sse.data:
+                continue
+            json_obj = json.loads(sse.data)
+            yield SubroutineResponse.model_validate(json_obj)
+
     def rpc_request(
             self,
             request: JSONRPCRequest,
-            path: Optional[str] = None
+            path: Optional[str] = None,
+            options: Optional[HTTPOptions] = None
     ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse]]:
-        json_request = JSONRequest(
-            method="POST",
-            path=path or f"/{request.method}",
+        json_request = HTTPRequest(
+            path=path or "/message",
             json_obj=request.model_dump(),
+            options=options or HTTPOptions()
         )
-        json_response = self.request(json_request)
+        json_response = self.http_request(json_request)
         if not json_response.stream:
             return JSONRPCResponse.model_validate(json_response.content)
         else:
             return self._iter_rpc_response(json_response)
 
     @staticmethod
-    def _iter_rpc_response(response: JSONResponse) -> Iterable[JSONRPCResponse]:
+    def _iter_rpc_response(response: HTTPResponse) -> Iterable[JSONRPCResponse]:
         for sse in response.content:
             assert isinstance(sse, SSE)
             if sse.event != "message":
@@ -362,6 +396,32 @@ class APIClient(AbstractMCPClient):
 
     def start_session(self, sse_endpoint: str = "/sse"):
         return SSESession(self, sse_endpoint=sse_endpoint)
+
+    def request(self, path, params, options=None):
+        response = self.subroutine_request(path, params, options)
+        if not isinstance(response, GeneratorType):
+            if response.error is None:
+                return response.result
+            else:
+                raise ServiceError(
+                    message=response.error.message,
+                    cause=response.error.error,
+                    _traceback=response.error.traceback
+                )
+        else:
+
+            def gen():
+                for item in response:
+                    if item.error is None:
+                        yield item.result
+                    else:
+                        raise ServiceError(
+                            message=item.error.message,
+                            cause=item.error.error,
+                            _traceback=item.error.traceback
+                        )
+
+            return gen()
 
 
 class SSESession(AbstractMCPClient):
@@ -378,12 +438,14 @@ class SSESession(AbstractMCPClient):
         self.pendings = {}
 
     def _sse_loop(self):
-        request = JSONRequest(
-            method="GET",
+        request = HTTPRequest(
             path=self.sse_endpoint,
-            timeout=60,
+            options=HTTPOptions(
+                method="GET",
+                timeout=60
+            )
         )
-        response = self.client.request(request)
+        response = self.client.http_request(request)
         assert response.stream
         type_adapter = TypeAdapter(Union[JSONRPCRequest, JSONRPCResponse, JSONRPCNotification])
         for sse in response.content:
@@ -419,7 +481,12 @@ class SSESession(AbstractMCPClient):
         if pending is not None:
             pending.put(response)
 
-    def rpc_request(self, request: JSONRPCRequest, path: Optional[str] = None) -> JSONRPCResponse:
+    def rpc_request(
+            self,
+            request: JSONRPCRequest,
+            path: Optional[str] = None,
+            options: Optional[HTTPOptions] = None
+    ) -> JSONRPCResponse:
         with self.lock:
             if path is None:
                 path = self.endpoint
@@ -427,11 +494,16 @@ class SSESession(AbstractMCPClient):
             pending = Queue(8)
             self.pendings[request.id] = pending
 
-        self.client.request(JSONRequest(
-            method="POST",
+        if options is None:
+            options = HTTPOptions(stream=False)
+
+        if options.stream is None or options.stream == True:
+            raise ValueError(f"options.stream should be False.")
+
+        self.client.http_request(HTTPRequest(
             path=path,
             json_obj=request.model_dump(),
-            stream=False
+            options=options
         ))
 
         response = pending.get()
@@ -445,14 +517,24 @@ class SSESession(AbstractMCPClient):
             )
         return response
 
-    def rpc_notify(self, request: JSONRPCNotification, path: Optional[str] = None) -> None:
+    def rpc_notify(
+            self,
+            request: JSONRPCNotification,
+            path: Optional[str] = None,
+            options: Optional[HTTPOptions] = None
+    ) -> None:
         if path is None:
             with self.lock:
                 path = self.endpoint
 
-        self.client.request(JSONRequest(
-            method="POST",
+        if options is None:
+            options = HTTPOptions(stream=False)
+
+        if options.stream is None or options.stream == True:
+            raise ValueError(f"options.stream should be False.")
+
+        self.client.http_request(HTTPRequest(
             path=path,
             json_obj=request.model_dump(),
-            stream=False
+            options=options
         ))
