@@ -17,7 +17,7 @@ from inspect import signature
 from typing import Any, Dict, Iterable, List, Literal, Mapping, MutableMapping, NoReturn, Optional, Sequence, Type, \
     Union, get_args, get_origin
 
-from pydantic import BaseModel, Field, RootModel, create_model
+from pydantic import BaseModel, ConfigDict, Field, RootModel, create_model
 from pydantic_core import PydanticUndefined
 
 
@@ -57,7 +57,11 @@ def get_api_signature(fn, ignores: List[str] = ("self", "cls")) -> APISignature:
                 input_model = origin
     if input_model is None:
         name = "".join(word.capitalize() for word in fn.__name__.split("_"))
-        bundled_model = create_model(f"{name}Request*", **fields)
+        bundled_model = create_model(
+            f"{name}Request*",
+            __config__=ConfigDict(extra="forbid"),
+            **fields
+        )
 
     output_type = None
     output_model = None
