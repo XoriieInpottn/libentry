@@ -16,10 +16,47 @@ from pydantic import BaseModel, TypeAdapter
 
 from libentry import json
 from libentry.mcp.types import CallToolRequestParams, CallToolResult, ClientCapabilities, HTTPOptions, HTTPRequest, \
-    HTTPResponse, Implementation, InitializeRequestParams, InitializeResult, JSONObject, JSONRPCNotification, \
+    HTTPResponse, Implementation, InitializeRequestParams, InitializeResult, JSONObject, JSONRPCError, \
+    JSONRPCNotification, \
     JSONRPCRequest, \
     JSONRPCResponse, JSONType, ListResourcesResult, ListToolsResult, MIME, ReadResourceRequestParams, \
-    ReadResourceResult, SSE, ServiceError, SubroutineResponse
+    ReadResourceResult, SSE, SubroutineError, SubroutineResponse
+
+
+class ServiceError(RuntimeError):
+
+    def __init__(
+            self,
+            message: str,
+            cause: Optional[str] = None,
+            _traceback: Optional[str] = None
+    ):
+        self.message = message
+        self.cause = cause
+        self.traceback = _traceback
+
+    def __str__(self):
+        lines = []
+        if self.message:
+            lines += [self.message, "\n\n"]
+        if self.cause:
+            lines += ["This is caused by server side error ", self.cause, ".\n"]
+        if self.traceback:
+            lines += ["Below is the stacktrace:\n", self.traceback.rstrip()]
+        return "".join(lines)
+
+    @staticmethod
+    def from_subroutine_error(error: SubroutineError):
+        return ServiceError(error.message, error.error, error.traceback)
+
+    @staticmethod
+    def from_jsonrpc_error(error: JSONRPCError):
+        cause = None
+        traceback_ = None
+        if isinstance(error.data, Dict):
+            cause = error.data.get("error")
+            traceback_ = error.data.get("traceback")
+        return ServiceError(error.message, cause, traceback_)
 
 
 class SSEDecoder:
@@ -80,83 +117,107 @@ class SSEDecoder:
         return None
 
 
-class AbstractMCPClient(abc.ABC):
+class AbstractRPCClient(abc.ABC):
 
     @abc.abstractmethod
     def jsonrpc_request(
             self,
             request: JSONRPCRequest,
-            path: Optional[str] = None
+            path: Optional[str] = None,
+            options: Optional[HTTPOptions] = None
     ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse]]:
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def jsonrpc_notify(self, request: JSONRPCNotification, path: Optional[str] = None) -> None:
+    def jsonrpc_notify(
+            self,
+            request: JSONRPCNotification,
+            path: Optional[str] = None,
+            options: Optional[HTTPOptions] = None
+    ) -> None:
         raise NotImplementedError()
 
-    def initialize(self) -> InitializeResult:
-        response = self.jsonrpc_request(JSONRPCRequest(
+    def call(
+            self,
+            method: str,
+            params: Optional[JSONObject] = None,
+            options: Optional[HTTPOptions] = None
+    ) -> Union[JSONType, Iterable[JSONType]]:
+        request = JSONRPCRequest(
             jsonrpc="2.0",
             id=str(uuid.uuid4()),
-            method="initialize",
-            params=InitializeRequestParams(
-                protocolVersion="2024-11-05",
-                capabilities=ClientCapabilities(),
-                clientInfo=Implementation(name="libentry-client", version="1.0.0")
-            ).model_dump(exclude_none=True)
-        ))
-        if response.error is not None:
-            raise ServiceError.from_jsonrpc_error(response.error)
+            method=method,
+            params=params
+        )
+
+        response = self.jsonrpc_request(request, options=options)
+
+        if not isinstance(response, GeneratorType):
+            if response.error is None:
+                return response.result
+            else:
+                raise ServiceError.from_jsonrpc_error(response.error)
+        else:
+            return self._iter_results_from_jsonrpc(response)
+
+    @staticmethod
+    def _iter_results_from_jsonrpc(responses: Iterable[JSONRPCResponse]) -> Iterable[JSONType]:
+        for response in responses:
+            if response.error is None:
+                yield response.result
+            else:
+                raise ServiceError.from_jsonrpc_error(response.error)
+
+
+class AbstractMCPClient(AbstractRPCClient, abc.ABC):
+
+    def initialize(self) -> InitializeResult:
+        params = InitializeRequestParams(
+            protocolVersion="2024-11-05",
+            capabilities=ClientCapabilities(),
+            clientInfo=Implementation(name="libentry-client", version="1.0.0")
+        ).model_dump(exclude_none=True)
+
+        result = self.call("initialize", params)
 
         self.jsonrpc_notify(JSONRPCNotification(
             jsonrpc="2.0", method="notifications/initialized"
         ))
-        return InitializeResult.model_validate(response.result)
+
+        return InitializeResult.model_validate(result)
 
     def list_tools(self) -> ListToolsResult:
-        response = self.jsonrpc_request(JSONRPCRequest(
-            jsonrpc="2.0",
-            id=str(uuid.uuid4()),
-            method="tools/list"
-        ))
-        if response.error is not None:
-            raise ServiceError.from_jsonrpc_error(response.error)
-        return ListToolsResult.model_validate(response.result)
+        result = self.call("tools/list")
+        return ListToolsResult.model_validate(result)
 
-    def call_tool(self, name: str, arguments: Dict[str, Any]) -> CallToolResult:
-        response = self.jsonrpc_request(JSONRPCRequest(
-            jsonrpc="2.0",
-            id=str(uuid.uuid4()),
-            method="tools/call",
-            params=CallToolRequestParams(
-                name=name,
-                arguments=arguments
-            ).model_dump()
-        ))
-        if response.error is not None:
-            raise ServiceError.from_jsonrpc_error(response.error)
-        return CallToolResult.model_validate(response.result)
+    def call_tool(self, name: str, arguments: Dict[str, Any]) -> Union[CallToolResult, Iterable[CallToolResult]]:
+        params = CallToolRequestParams(
+            name=name,
+            arguments=arguments
+        ).model_dump()
+        result = self.call("tools/call", params)
+        if not isinstance(result, GeneratorType):
+            return CallToolResult.model_validate(result)
+        else:
+            return (
+                CallToolResult.model_validate(item)
+                for item in result
+            )
 
     def list_resources(self) -> ListResourcesResult:
-        response = self.jsonrpc_request(JSONRPCRequest(
-            jsonrpc="2.0",
-            id=str(uuid.uuid4()),
-            method="resources/list"
-        ))
-        if response.error is not None:
-            raise ServiceError.from_jsonrpc_error(response.error)
-        return ListResourcesResult.model_validate(response.result)
+        result = self.call("resources/list")
+        return ListResourcesResult.model_validate(result)
 
-    def read_resource(self, uri: str) -> ReadResourceResult:
-        response = self.jsonrpc_request(JSONRPCRequest(
-            jsonrpc="2.0",
-            id=str(uuid.uuid4()),
-            method="resources/read",
-            params=ReadResourceRequestParams(uri=uri).model_dump()
-        ))
-        if response.error is not None:
-            raise ServiceError.from_jsonrpc_error(response.error)
-        return ReadResourceResult.model_validate(response.result)
+    def read_resource(self, uri: str) -> Union[ReadResourceResult, Iterable[ReadResourceResult]]:
+        params = ReadResourceRequestParams(uri=uri).model_dump()
+        result = self.call("resources/read", params)
+        if not isinstance(result, GeneratorType):
+            return ReadResourceResult.model_validate(result)
+        else:
+            return (
+                ReadResourceResult.model_validate(item)
+                for item in result
+            )
 
 
 class APIClient(AbstractMCPClient):
@@ -397,7 +458,12 @@ class APIClient(AbstractMCPClient):
             json_obj = json.loads(sse.data)
             yield JSONRPCResponse.model_validate(json_obj)
 
-    def jsonrpc_notify(self, request: JSONRPCNotification, path: Optional[str] = None) -> None:
+    def jsonrpc_notify(
+            self,
+            request: JSONRPCNotification,
+            path: Optional[str] = None,
+            options: Optional[HTTPOptions] = None
+    ) -> None:
         pass
 
     def start_session(self, sse_endpoint: Optional[str] = None):
@@ -425,37 +491,6 @@ class APIClient(AbstractMCPClient):
                 yield response.result
             else:
                 raise ServiceError.from_subroutine_error(response.error)
-
-    def call(
-            self,
-            method: str,
-            params: Optional[JSONObject] = None,
-            options: Optional[HTTPOptions] = None
-    ) -> Union[JSONType, Iterable[JSONType]]:
-        request = JSONRPCRequest(
-            jsonrpc="2.0",
-            id=str(uuid.uuid4()),
-            method=method,
-            params=params
-        )
-
-        response = self.jsonrpc_request(request, options=options)
-
-        if not isinstance(response, GeneratorType):
-            if response.error is None:
-                return response.result
-            else:
-                raise ServiceError.from_jsonrpc_error(response.error)
-        else:
-            return self._iter_results_from_jsonrpc(response)
-
-    @staticmethod
-    def _iter_results_from_jsonrpc(responses: Iterable[JSONRPCResponse]) -> Iterable[JSONType]:
-        for response in responses:
-            if response.error is None:
-                yield response.result
-            else:
-                raise ServiceError.from_jsonrpc_error(response.error)
 
 
 class SSESession(AbstractMCPClient):

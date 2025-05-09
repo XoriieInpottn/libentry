@@ -4,7 +4,7 @@ __author__ = "xi"
 
 import asyncio
 import base64
-import traceback
+import io
 import uuid
 from dataclasses import dataclass
 from queue import Empty, Queue
@@ -44,19 +44,6 @@ except ImportError:
             logger.warn("Use Flask directly.")
             logger.warn("Options like \"num_threads\", \"num_workers\" are ignored.")
             return flask_server.run(host=host, port=port)
-
-
-def dump_error(e: Exception) -> Dict[str, str]:
-    err_cls = e.__class__
-    err_name = err_cls.__name__
-    module = err_cls.__module__
-    if module != "builtins":
-        err_name = f"{module}.{err_name}"
-    return {
-        "error": err_name,
-        "message": str(e),
-        "traceback": traceback.format_exc()
-    }
 
 
 class SubroutineAdapter:
@@ -284,7 +271,7 @@ class FlaskHandler:
         try:
             mcp_response = self.default_adapter(input_json)
         except Exception as e:
-            error = json.dumps(dump_error(e))
+            error = json.dumps(SubroutineError.from_exception(e))
             return self.app.error(error, mimetype=MIME.json.value)
 
         ################################################################################
@@ -570,54 +557,70 @@ class ToolsService:
             raise RuntimeError(f"Tool \"{params.name}\" doesn't exist.")
 
         try:
-            result = route.handler.subroutine_adapter(params.arguments)
+            response = route.handler.subroutine_adapter(params.arguments)
         except Exception as e:
-            error = json.dumps(dump_error(e))
+            error = json.dumps(SubroutineError.from_exception(e))
             return CallToolResult(
                 content=[TextContent(text=error)],
                 isError=True
             )
 
-        if not isinstance(result, GeneratorType):
-            text = json.dumps(result) if isinstance(result, (Dict, BaseModel)) else str(result)
-            return CallToolResult(
-                content=[TextContent(text=text)],
-                isError=False
-            )
-        else:
-            return self._iter_tool_result(result)
-
-    @staticmethod
-    def _iter_tool_result(
-            results: Iterable[Any]
-    ) -> Generator[CallToolResult, None, CallToolResult]:
-        text_list = []
-        error = None
-        try:
-            for result in results:
+        if not isinstance(response, GeneratorType):
+            if response.error is not None:
+                text = json.dumps(response.error)
+                return CallToolResult(
+                    content=[TextContent(text=text)],
+                    isError=True
+                )
+            else:
+                result = response.result
                 text = json.dumps(result) if isinstance(result, (Dict, BaseModel)) else str(result)
-                text_list.append(text)
-                yield CallToolResult(
+                return CallToolResult(
                     content=[TextContent(text=text)],
                     isError=False
                 )
+        else:
+            return self._iter_tool_results(response)
+
+    @staticmethod
+    def _iter_tool_results(
+            responses: Iterable[SubroutineResponse]
+    ) -> Generator[CallToolResult, None, CallToolResult]:
+        final_text = io.StringIO()
+        error = None
+        try:
+            for response in responses:
+                if response.error is not None:
+                    text = json.dumps(response.error)
+                    error = CallToolResult(
+                        content=[TextContent(text=text)],
+                        isError=True
+                    )
+                    yield error
+                    break
+                else:
+                    result = response.result
+                    text = json.dumps(result) if isinstance(result, (Dict, BaseModel)) else str(result)
+                    yield CallToolResult(
+                        content=[TextContent(text=text)],
+                        isError=False
+                    )
+                    final_text.write(text)
         except Exception as e:
-            error = json.dumps(dump_error(e))
-            yield CallToolResult(
-                content=[TextContent(text=error)],
+            text = json.dumps(SubroutineError.from_exception(e))
+            error = CallToolResult(
+                content=[TextContent(text=text)],
                 isError=True
             )
+            yield error
 
         if error is None:
             return CallToolResult(
-                content=[TextContent(text="".join(text_list))],
+                content=[TextContent(text=final_text.getvalue())],
                 isError=False
             )
         else:
-            return CallToolResult(
-                content=[TextContent(text=error)],
-                isError=True
-            )
+            return error
 
 
 class ResourcesService:
@@ -664,19 +667,18 @@ class ResourcesService:
         api_info = route.api_info
         result = ReadResourceResult(contents=[])
         content = route.fn()
+        mime_type = api_info.model_extra.get("mimeType")
         if not isinstance(content, GeneratorType):
             if isinstance(content, str):
-                mime_type = api_info.model_extra.get("mimeType", "text/*")
                 result.contents.append(TextResourceContents(
                     uri=request.uri,
-                    mimeType=mime_type,
+                    mimeType=mime_type or "text/*",
                     text=content
                 ))
             elif isinstance(content, bytes):
-                mime_type = api_info.model_extra.get("mimeType", "binary/*")
                 result.contents.append(BlobResourceContents(
                     uri=request.uri,
-                    mimeType=mime_type,
+                    mimeType=mime_type or "binary/*",
                     blob=base64.b64encode(content).decode()
                 ))
             else:
@@ -684,52 +686,29 @@ class ResourcesService:
             return result
         else:
             # todo: this branch is not tested yet
-            return self._iter_resource_result(content, request.uri, api_info)
+            return self._iter_resource_results(content, request.uri, mime_type)
 
     @staticmethod
-    def _iter_resource_result(
+    def _iter_resource_results(
             contents: Iterable[Union[str, bytes]],
             uri: str,
-            api_info: APIInfo
+            mime_type: Optional[str] = None
     ) -> Generator[ReadResourceResult, None, Optional[ReadResourceResult]]:
-        final_results = []
         for content in contents:
             if isinstance(content, str):
-                mime_type = api_info.model_extra.get("mimeType", "text/*")
                 yield ReadResourceResult(contents=[TextResourceContents(
                     uri=uri,
-                    mimeType=mime_type,
+                    mimeType=mime_type or "text/*",
                     text=content
                 )])
-                final_results.append(content)
             elif isinstance(content, bytes):
-                mime_type = api_info.model_extra.get("mimeType", "binary/*")
                 yield ReadResourceResult(contents=[BlobResourceContents(
                     uri=uri,
-                    mimeType=mime_type,
+                    mimeType=mime_type or "binary/*",
                     blob=base64.b64encode(content).decode()
                 )])
-                final_results.append(content)
             else:
                 raise RuntimeError(f"Unsupported content type \"{type(content)}\".")
-
-        if len(final_results) == 0:
-            return None
-
-        if isinstance(final_results[0], str):
-            mime_type = api_info.model_extra.get("mimeType", "text/*")
-            return ReadResourceResult(contents=[TextResourceContents(
-                uri=uri,
-                mimeType=mime_type,
-                text="".join(final_results)
-            )])
-        else:
-            mime_type = api_info.model_extra.get("mimeType", "binary/*")
-            return ReadResourceResult(contents=[BlobResourceContents(
-                uri=uri,
-                mimeType=mime_type,
-                blob=base64.b64encode(b"".join(final_results)).decode()
-            )])
 
 
 @dataclass

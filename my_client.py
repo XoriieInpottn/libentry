@@ -2,8 +2,22 @@
 
 __author__ = "xi"
 
+from types import GeneratorType
+from typing import List
+
+import rich
+
 from libentry.mcp.client import APIClient, SSESession
 from libentry.mcp.types import JSONRPCRequest
+
+
+def print_response(resp):
+    if not isinstance(resp, (GeneratorType, List)):
+        rich.print(resp)
+    else:
+        for item in resp:
+            rich.print(item)
+    print()
 
 
 def main():
@@ -11,74 +25,68 @@ def main():
 
     print("Subroutine\n" + "=" * 80)
     resp = client.request("/add", {"a": 1, "b": 2})
-    print(resp)
-    print()
+    print_response(resp)
 
     print("Subroutine stream\n" + "=" * 80)
     resp = client.request("/add_stream", {"a": 1, "b": 2})
-    for item in resp:
-        print(item, flush=True)
-    print()
+    print_response(resp)
 
     ################################################################################
 
-    print("RPC\n" + "=" * 80)
+    print("JSONRPC\n" + "=" * 80)
     resp = client.call("add", {"a": 1, "b": 2})
-    print(resp)
-    print()
+    print_response(resp)
 
-    print("RPC stream\n" + "=" * 80)
+    print("JSONRPC stream\n" + "=" * 80)
     resp = client.call("add_stream", {"a": 1, "b": 2})
-    for item in resp:
-        print(item, flush=True)
-    print()
+    print_response(resp)
 
-    print("RPC tools/list\n" + "=" * 80)
-    for tool in client.list_tools().tools:
-        print(tool.model_dump_json(exclude_none=True))
-    print()
+    print("JSONRPC tools/list\n" + "=" * 80)
+    resp = client.list_tools().tools
+    print_response(resp)
 
-    print("RPC tools/call\n" + "=" * 80)
+    print("JSONRPC tools/call\n" + "=" * 80)
     resp = client.call_tool("add", {"a": 1, "b": 2})
-    print(resp)
-    print()
+    print_response(resp)
 
-    print("RPC resources/list\n" + "=" * 80)
-    for resource in client.list_resources().resources:
-        print(resource.model_dump_json(exclude_none=True))
-    print()
+    print("JSONRPC tools/call stream\n" + "=" * 80)
+    resp = client.call_tool("add_stream", {"a": 1, "b": 2})
+    print_response(resp)
 
-    print("RPC resources/read\n" + "=" * 80)
+    print("JSONRPC resources/list\n" + "=" * 80)
+    resp = client.list_resources().resources
+    print_response(resp)
+
+    print("JSONRPC resources/read\n" + "=" * 80)
     resp = client.read_resource("config://app")
-    print(resp)
-    print()
+    print_response(resp)
 
     ################################################################################
 
     print("Session initialize\n" + "=" * 80)
     session = client.start_session()
-    print(session.initialize())
-    print()
+    resp = session.initialize()
+    print_response(resp)
 
     print("Session tools/list\n" + "=" * 80)
-    for tool in session.list_tools().tools:
-        print(tool.model_dump_json(exclude_none=True))
-    print()
+    resp = session.list_tools().tools
+    print_response(resp)
 
     print("Session tools/call\n" + "=" * 80)
     resp = session.call_tool("add", {"a": 1, "b": 2})
-    print(resp)
-    print()
+    print_response(resp)
+
+    print("Session tools/call stream\n" + "=" * 80)
+    resp = session.call_tool("add_stream", {"a": 1, "b": 2})
+    print_response(resp)
 
     print("Session resources/list\n" + "=" * 80)
-    for resource in session.list_resources().resources:
-        print(resource.model_dump_json(exclude_none=True))
-    print()
+    resp = session.list_resources().resources
+    print_response(resp)
 
     print("Session resources/read\n" + "=" * 80)
     resp = session.read_resource("config://app")
-    print(resp)
-    print()
+    print_response(resp)
     return 0
 
 

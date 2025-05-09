@@ -134,42 +134,6 @@ class JSONRPCResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-class ServiceError(RuntimeError):
-
-    def __init__(
-            self,
-            message: str,
-            cause: Optional[str] = None,
-            _traceback: Optional[str] = None
-    ):
-        self.message = message
-        self.cause = cause
-        self.traceback = _traceback
-
-    def __str__(self):
-        lines = []
-        if self.message:
-            lines += [self.message, "\n\n"]
-        if self.cause:
-            lines += ["This is caused by server side error ", self.cause, ".\n"]
-        if self.traceback:
-            lines += ["Below is the stacktrace:\n", self.traceback.rstrip()]
-        return "".join(lines)
-
-    @staticmethod
-    def from_subroutine_error(error: SubroutineError):
-        return ServiceError(error.message, error.error, error.traceback)
-
-    @staticmethod
-    def from_jsonrpc_error(error: JSONRPCError):
-        cause = None
-        traceback_ = None
-        if isinstance(error.data, Dict):
-            cause = error.data.get("error")
-            traceback_ = error.data.get("traceback")
-        return ServiceError(error.message, cause, traceback_)
-
-
 class PaginatedRequest(BaseModel):
     cursor: Optional[str] = None
     """
