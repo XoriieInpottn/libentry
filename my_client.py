@@ -10,27 +10,27 @@ def main():
     client = APIClient("http://localhost:8000")
 
     print("Subroutine\n" + "=" * 80)
-    resp = client.subroutine_request("/add", {"a": 1, "b": 2})
-    print(resp.result)
+    resp = client.request("/add", {"a": 1, "b": 2})
+    print(resp)
     print()
 
     print("Subroutine stream\n" + "=" * 80)
-    resp = client.subroutine_request("/add_stream", {"a": 1, "b": 2})
+    resp = client.request("/add_stream", {"a": 1, "b": 2})
     for item in resp:
-        print(item.result, flush=True)
+        print(item, flush=True)
     print()
 
     ################################################################################
 
     print("RPC\n" + "=" * 80)
-    resp = client.rpc_request(JSONRPCRequest(jsonrpc="2.0", method="add", id=1, params={"a": 1, "b": 2}))
-    print(resp.result)
+    resp = client.call("add", {"a": 1, "b": 2})
+    print(resp)
     print()
 
     print("RPC stream\n" + "=" * 80)
-    resp = client.rpc_request(JSONRPCRequest(jsonrpc="2.0", method="add_stream", id=1, params={"a": 1, "b": 2}))
+    resp = client.call("add_stream", {"a": 1, "b": 2})
     for item in resp:
-        print(item.result, flush=True)
+        print(item, flush=True)
     print()
 
     print("RPC tools/list\n" + "=" * 80)
@@ -56,7 +56,7 @@ def main():
     ################################################################################
 
     print("Session initialize\n" + "=" * 80)
-    session = SSESession(client)
+    session = client.start_session()
     print(session.initialize())
     print()
 

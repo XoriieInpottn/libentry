@@ -16,9 +16,10 @@ from pydantic import BaseModel, TypeAdapter
 
 from libentry import json
 from libentry.mcp.types import CallToolRequestParams, CallToolResult, ClientCapabilities, HTTPOptions, HTTPRequest, \
-    HTTPResponse, Implementation, InitializeRequestParams, InitializeResult, JSONRPCNotification, JSONRPCRequest, \
-    JSONRPCResponse, ListResourcesResult, ListToolsResult, MIME, ReadResourceRequestParams, ReadResourceResult, SSE, \
-    ServiceError, SubroutineResponse
+    HTTPResponse, Implementation, InitializeRequestParams, InitializeResult, JSONObject, JSONRPCNotification, \
+    JSONRPCRequest, \
+    JSONRPCResponse, JSONType, ListResourcesResult, ListToolsResult, MIME, ReadResourceRequestParams, \
+    ReadResourceResult, SSE, ServiceError, SubroutineResponse
 
 
 class SSEDecoder:
@@ -82,7 +83,7 @@ class SSEDecoder:
 class AbstractMCPClient(abc.ABC):
 
     @abc.abstractmethod
-    def rpc_request(
+    def jsonrpc_request(
             self,
             request: JSONRPCRequest,
             path: Optional[str] = None
@@ -90,11 +91,11 @@ class AbstractMCPClient(abc.ABC):
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def rpc_notify(self, request: JSONRPCNotification, path: Optional[str] = None) -> None:
+    def jsonrpc_notify(self, request: JSONRPCNotification, path: Optional[str] = None) -> None:
         raise NotImplementedError()
 
     def initialize(self) -> InitializeResult:
-        response = self.rpc_request(JSONRPCRequest(
+        response = self.jsonrpc_request(JSONRPCRequest(
             jsonrpc="2.0",
             id=str(uuid.uuid4()),
             method="initialize",
@@ -105,25 +106,25 @@ class AbstractMCPClient(abc.ABC):
             ).model_dump(exclude_none=True)
         ))
         if response.error is not None:
-            raise ServiceError.from_rpc_error(response.error)
+            raise ServiceError.from_jsonrpc_error(response.error)
 
-        self.rpc_notify(JSONRPCNotification(
+        self.jsonrpc_notify(JSONRPCNotification(
             jsonrpc="2.0", method="notifications/initialized"
         ))
         return InitializeResult.model_validate(response.result)
 
     def list_tools(self) -> ListToolsResult:
-        response = self.rpc_request(JSONRPCRequest(
+        response = self.jsonrpc_request(JSONRPCRequest(
             jsonrpc="2.0",
             id=str(uuid.uuid4()),
             method="tools/list"
         ))
         if response.error is not None:
-            raise ServiceError.from_rpc_error(response.error)
+            raise ServiceError.from_jsonrpc_error(response.error)
         return ListToolsResult.model_validate(response.result)
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> CallToolResult:
-        response = self.rpc_request(JSONRPCRequest(
+        response = self.jsonrpc_request(JSONRPCRequest(
             jsonrpc="2.0",
             id=str(uuid.uuid4()),
             method="tools/call",
@@ -133,28 +134,28 @@ class AbstractMCPClient(abc.ABC):
             ).model_dump()
         ))
         if response.error is not None:
-            raise ServiceError.from_rpc_error(response.error)
+            raise ServiceError.from_jsonrpc_error(response.error)
         return CallToolResult.model_validate(response.result)
 
     def list_resources(self) -> ListResourcesResult:
-        response = self.rpc_request(JSONRPCRequest(
+        response = self.jsonrpc_request(JSONRPCRequest(
             jsonrpc="2.0",
             id=str(uuid.uuid4()),
             method="resources/list"
         ))
         if response.error is not None:
-            raise ServiceError.from_rpc_error(response.error)
+            raise ServiceError.from_jsonrpc_error(response.error)
         return ListResourcesResult.model_validate(response.result)
 
     def read_resource(self, uri: str) -> ReadResourceResult:
-        response = self.rpc_request(JSONRPCRequest(
+        response = self.jsonrpc_request(JSONRPCRequest(
             jsonrpc="2.0",
             id=str(uuid.uuid4()),
             method="resources/read",
             params=ReadResourceRequestParams(uri=uri).model_dump()
         ))
         if response.error is not None:
-            raise ServiceError.from_rpc_error(response.error)
+            raise ServiceError.from_jsonrpc_error(response.error)
         return ReadResourceResult.model_validate(response.result)
 
 
@@ -163,6 +164,7 @@ class APIClient(AbstractMCPClient):
     def __init__(
             self,
             base_url: Optional[str] = None,
+            *,
             headers: Optional[Dict[str, str]] = None,
             content_type: str = MIME.json.value,
             accept: str = f"{MIME.plain.value},{MIME.json.value},{MIME.sse.value}",
@@ -170,7 +172,9 @@ class APIClient(AbstractMCPClient):
             connection: str = "keep-alive",
             api_key: Optional[str] = None,
             verify=False,
-            stream_read_size: int = 512
+            stream_read_size: int = 512,
+            sse_endpoint: str = "/sse",
+            jsonrpc_endpoint: str = "/message"
     ) -> None:
         self.base_url = base_url
 
@@ -185,6 +189,8 @@ class APIClient(AbstractMCPClient):
 
         self.verify = verify
         self.stream_read_size = stream_read_size
+        self.sse_endpoint = sse_endpoint
+        self.jsonrpc_endpoint = jsonrpc_endpoint
 
         self.client = httpx.Client(verify=verify)
 
@@ -350,10 +356,10 @@ class APIClient(AbstractMCPClient):
         if not json_response.stream:
             return SubroutineResponse.model_validate(json_response.content)
         else:
-            return self._iter_subroutine_response(json_response)
+            return self._iter_subroutine_responses(json_response)
 
     @staticmethod
-    def _iter_subroutine_response(response: HTTPResponse) -> Iterable[SubroutineResponse]:
+    def _iter_subroutine_responses(response: HTTPResponse) -> Iterable[SubroutineResponse]:
         for sse in response.content:
             assert isinstance(sse, SSE)
             if sse.event != "message":
@@ -363,14 +369,14 @@ class APIClient(AbstractMCPClient):
             json_obj = json.loads(sse.data)
             yield SubroutineResponse.model_validate(json_obj)
 
-    def rpc_request(
+    def jsonrpc_request(
             self,
             request: JSONRPCRequest,
             path: Optional[str] = None,
             options: Optional[HTTPOptions] = None
     ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse]]:
         json_request = HTTPRequest(
-            path=path or "/message",
+            path=path or self.jsonrpc_endpoint,
             json_obj=request.model_dump(),
             options=options or HTTPOptions()
         )
@@ -378,10 +384,10 @@ class APIClient(AbstractMCPClient):
         if not json_response.stream:
             return JSONRPCResponse.model_validate(json_response.content)
         else:
-            return self._iter_rpc_response(json_response)
+            return self._iter_jsonrpc_responses(json_response)
 
     @staticmethod
-    def _iter_rpc_response(response: HTTPResponse) -> Iterable[JSONRPCResponse]:
+    def _iter_jsonrpc_responses(response: HTTPResponse) -> Iterable[JSONRPCResponse]:
         for sse in response.content:
             assert isinstance(sse, SSE)
             if sse.event != "message":
@@ -391,42 +397,70 @@ class APIClient(AbstractMCPClient):
             json_obj = json.loads(sse.data)
             yield JSONRPCResponse.model_validate(json_obj)
 
-    def rpc_notify(self, request: JSONRPCNotification, path: Optional[str] = None) -> None:
+    def jsonrpc_notify(self, request: JSONRPCNotification, path: Optional[str] = None) -> None:
         pass
 
-    def start_session(self, sse_endpoint: str = "/sse"):
-        return SSESession(self, sse_endpoint=sse_endpoint)
+    def start_session(self, sse_endpoint: Optional[str] = None):
+        return SSESession(self, sse_endpoint=sse_endpoint or self.sse_endpoint)
 
-    def request(self, path, params, options=None):
+    def request(
+            self,
+            path: str,
+            params: Optional[JSONObject] = None,
+            options: Optional[HTTPOptions] = None
+    ) -> Union[JSONType, Iterable[JSONType]]:
         response = self.subroutine_request(path, params, options)
         if not isinstance(response, GeneratorType):
             if response.error is None:
                 return response.result
             else:
-                raise ServiceError(
-                    message=response.error.message,
-                    cause=response.error.error,
-                    _traceback=response.error.traceback
-                )
+                raise ServiceError.from_subroutine_error(response.error)
         else:
+            return self._iter_results_from_subroutine(response)
 
-            def gen():
-                for item in response:
-                    if item.error is None:
-                        yield item.result
-                    else:
-                        raise ServiceError(
-                            message=item.error.message,
-                            cause=item.error.error,
-                            _traceback=item.error.traceback
-                        )
+    @staticmethod
+    def _iter_results_from_subroutine(responses: Iterable[SubroutineResponse]) -> Iterable[JSONType]:
+        for response in responses:
+            if response.error is None:
+                yield response.result
+            else:
+                raise ServiceError.from_subroutine_error(response.error)
 
-            return gen()
+    def call(
+            self,
+            method: str,
+            params: Optional[JSONObject] = None,
+            options: Optional[HTTPOptions] = None
+    ) -> Union[JSONType, Iterable[JSONType]]:
+        request = JSONRPCRequest(
+            jsonrpc="2.0",
+            id=str(uuid.uuid4()),
+            method=method,
+            params=params
+        )
+
+        response = self.jsonrpc_request(request, options=options)
+
+        if not isinstance(response, GeneratorType):
+            if response.error is None:
+                return response.result
+            else:
+                raise ServiceError.from_jsonrpc_error(response.error)
+        else:
+            return self._iter_results_from_jsonrpc(response)
+
+    @staticmethod
+    def _iter_results_from_jsonrpc(responses: Iterable[JSONRPCResponse]) -> Iterable[JSONType]:
+        for response in responses:
+            if response.error is None:
+                yield response.result
+            else:
+                raise ServiceError.from_jsonrpc_error(response.error)
 
 
 class SSESession(AbstractMCPClient):
 
-    def __init__(self, client: APIClient, sse_endpoint: str = "/sse"):
+    def __init__(self, client: APIClient, sse_endpoint: str):
         self.client = client
         self.sse_endpoint = sse_endpoint
 
@@ -481,7 +515,7 @@ class SSESession(AbstractMCPClient):
         if pending is not None:
             pending.put(response)
 
-    def rpc_request(
+    def jsonrpc_request(
             self,
             request: JSONRPCRequest,
             path: Optional[str] = None,
@@ -517,7 +551,7 @@ class SSESession(AbstractMCPClient):
             )
         return response
 
-    def rpc_notify(
+    def jsonrpc_notify(
             self,
             request: JSONRPCNotification,
             path: Optional[str] = None,

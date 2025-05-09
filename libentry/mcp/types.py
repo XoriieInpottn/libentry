@@ -8,6 +8,10 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
+JSONObject = Dict[str, Any]
+JSONList = List[Any]
+JSONType = Union[JSONObject, JSONList, str, int, float, bool, None]
+
 
 class MIME(Enum):
     plain = "text/plain"
@@ -132,7 +136,12 @@ class JSONRPCResponse(BaseModel):
 
 class ServiceError(RuntimeError):
 
-    def __init__(self, message: str, cause: Optional[str] = None, _traceback: Optional[str] = None):
+    def __init__(
+            self,
+            message: str,
+            cause: Optional[str] = None,
+            _traceback: Optional[str] = None
+    ):
         self.message = message
         self.cause = cause
         self.traceback = _traceback
@@ -148,7 +157,11 @@ class ServiceError(RuntimeError):
         return "".join(lines)
 
     @staticmethod
-    def from_rpc_error(error: JSONRPCError):
+    def from_subroutine_error(error: SubroutineError):
+        return ServiceError(error.message, error.error, error.traceback)
+
+    @staticmethod
+    def from_jsonrpc_error(error: JSONRPCError):
         cause = None
         traceback_ = None
         if isinstance(error.data, Dict):
