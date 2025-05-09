@@ -117,7 +117,65 @@ class SSEDecoder:
         return None
 
 
-class AbstractRPCClient(abc.ABC):
+class SubroutineMixIn(abc.ABC):
+
+    @abc.abstractmethod
+    def subroutine_request(
+            self,
+            path: str,
+            params: Dict[str, Any],
+            options: Optional[HTTPOptions] = None
+    ) -> Union[SubroutineResponse, Iterable[SubroutineResponse]]:
+        raise NotImplementedError()
+
+    def request(
+            self,
+            path: str,
+            params: Optional[JSONObject] = None,
+            options: Optional[HTTPOptions] = None
+    ) -> Union[JSONType, Iterable[JSONType]]:
+        response = self.subroutine_request(path, params, options)
+        if not isinstance(response, GeneratorType):
+            if response.error is None:
+                return response.result
+            else:
+                raise ServiceError.from_subroutine_error(response.error)
+        else:
+            return self._iter_results_from_subroutine(response)
+
+    @staticmethod
+    def _iter_results_from_subroutine(responses: Iterable[SubroutineResponse]) -> Iterable[JSONType]:
+        for response in responses:
+            if response.error is None:
+                yield response.result
+            else:
+                raise ServiceError.from_subroutine_error(response.error)
+
+    def get(
+            self,
+            path: str,
+            options: Optional[HTTPOptions] = None
+    ) -> Union[JSONType, Iterable[JSONType]]:
+        if options is None:
+            options = HTTPOptions(method="GET")
+        if options.method != "GET":
+            raise ValueError("options.method should be \"GET\".")
+        return self.request(path=path, params=None, options=options)
+
+    def post(
+            self,
+            path: str,
+            params: Optional[JSONObject] = None,
+            options: Optional[HTTPOptions] = None
+    ) -> Union[JSONType, Iterable[JSONType]]:
+        if options is None:
+            options = HTTPOptions(method="POST")
+        if options.method != "POST":
+            raise ValueError("options.method should be \"POST\".")
+        return self.request(path=path, params=params, options=options)
+
+
+class JSONRPCMixIn(abc.ABC):
 
     @abc.abstractmethod
     def jsonrpc_request(
@@ -169,7 +227,7 @@ class AbstractRPCClient(abc.ABC):
                 raise ServiceError.from_jsonrpc_error(response.error)
 
 
-class AbstractMCPClient(AbstractRPCClient, abc.ABC):
+class MCPMixIn(JSONRPCMixIn, abc.ABC):
 
     def initialize(self) -> InitializeResult:
         params = InitializeRequestParams(
@@ -220,7 +278,7 @@ class AbstractMCPClient(AbstractRPCClient, abc.ABC):
             )
 
 
-class APIClient(AbstractMCPClient):
+class APIClient(SubroutineMixIn, MCPMixIn):
 
     def __init__(
             self,
@@ -469,31 +527,8 @@ class APIClient(AbstractMCPClient):
     def start_session(self, sse_endpoint: Optional[str] = None):
         return SSESession(self, sse_endpoint=sse_endpoint or self.sse_endpoint)
 
-    def request(
-            self,
-            path: str,
-            params: Optional[JSONObject] = None,
-            options: Optional[HTTPOptions] = None
-    ) -> Union[JSONType, Iterable[JSONType]]:
-        response = self.subroutine_request(path, params, options)
-        if not isinstance(response, GeneratorType):
-            if response.error is None:
-                return response.result
-            else:
-                raise ServiceError.from_subroutine_error(response.error)
-        else:
-            return self._iter_results_from_subroutine(response)
 
-    @staticmethod
-    def _iter_results_from_subroutine(responses: Iterable[SubroutineResponse]) -> Iterable[JSONType]:
-        for response in responses:
-            if response.error is None:
-                yield response.result
-            else:
-                raise ServiceError.from_subroutine_error(response.error)
-
-
-class SSESession(AbstractMCPClient):
+class SSESession(MCPMixIn):
 
     def __init__(self, client: APIClient, sse_endpoint: str):
         self.client = client

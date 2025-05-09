@@ -7,8 +7,7 @@ from typing import List
 
 import rich
 
-from libentry.mcp.client import APIClient, SSESession
-from libentry.mcp.types import JSONRPCRequest
+from libentry.mcp.client import APIClient
 
 
 def print_response(resp):
@@ -24,11 +23,11 @@ def main():
     client = APIClient("http://localhost:8000")
 
     print("Subroutine\n" + "=" * 80)
-    resp = client.request("/add", {"a": 1, "b": 2})
+    resp = client.post("/add", {"a": 1, "b": 2})
     print_response(resp)
 
     print("Subroutine stream\n" + "=" * 80)
-    resp = client.request("/add_stream", {"a": 1, "b": 2})
+    resp = client.post("/add_stream", {"a": 1, "b": 2})
     print_response(resp)
 
     ################################################################################
