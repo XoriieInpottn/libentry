@@ -126,7 +126,7 @@ class JSONRPCError(BaseModel):
 
 
 class JSONRPCResponse(BaseModel):
-    jsonrpc: Literal["2.0"] = "2.0"
+    jsonrpc: Literal["2.0"]
     id: Union[str, int]
     result: Optional[Any] = None
     error: Optional[JSONRPCError] = None

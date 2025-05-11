@@ -134,6 +134,7 @@ class JSONRPCAdapter:
         except Exception as e:
             if isinstance(request, JSONRPCRequest):
                 return JSONRPCResponse(
+                    jsonrpc="2.0",
                     id=request.id,
                     error=JSONRPCError.from_exception(e)
                 )
