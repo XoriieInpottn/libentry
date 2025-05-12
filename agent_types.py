@@ -2,98 +2,283 @@
 
 __author__ = "xi"
 
-from typing import Any, Dict, List, Optional, Union
+import base64
+from typing import Any, Dict, List, Optional, Tuple, Union
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
+from scipy.sparse import csr_array
 
 
 class SystemProfile(BaseModel):
-    """The profile of the agent or its module."""
+    """Agent或其子模块自身的画像信息"""
 
     model_config = ConfigDict(extra="allow")
 
-    description: str
-    language: Optional[str] = None
-    capabilities: Optional[str] = None
-    constrains: Optional[str] = None
+    description: str = Field(
+        title="该模块的角色描述信息"
+    )
+    language: Optional[str] = Field(
+        title="该模块所使用的语言",
+        default=None
+    )
+    capabilities: Optional[List[str]] = Field(
+        title="该模块的能力范畴（如能完成什么任务），可分条描述",
+        default=None
+    )
+    constrains: Optional[List[str]] = Field(
+        title="该模块的约束条件（如立场原则、特殊规则），可分条描述",
+        default=None
+    )
 
 
 class ChatMessage(BaseModel):
-    """Chat message."""
+    """对话消息"""
 
     model_config = ConfigDict(extra="allow")
 
-    role: Optional[str] = None
-    content: str
+    content: str = Field(
+        title="消息内容"
+    )
+    role: Optional[str] = Field(
+        title="发出该消息的角色，也可以不设定，将其包含在content中",
+        default=None
+    )
+    thinking: Optional[str] = Field(
+        title="产生该对话消息时的思考内容（如有）",
+        default=None
+    )
 
 
-class Memory(BaseModel):
+class Mention(BaseModel):
+    """用户提及信息"""
+
     model_config = ConfigDict(extra="allow")
 
-    user_profile: Optional[str] = None
-    chat_history: Optional[List[ChatMessage]] = None
+    content: str = Field(
+        title="用户提及的内容，例如用户感兴趣的话题、实体等"
+    )
+    turn_id: Optional[Union[int, str]] = Field(
+        title="对应提及信息的轮次标识，不一定式数字，可以是关于轮次的描述（如最近、很早以前）",
+        default=None
+    )
 
 
+class SessionMemory(BaseModel):
+    """会话级（Session Level）记忆"""
+
+    model_config = ConfigDict(extra="allow")
+
+    chat_history: List[ChatMessage] = Field(
+        title="当前会话的历史对话信息，默认为空列表",
+        default_factory=list
+    )
+    mentions: Optional[List[Mention]] = Field(
+        title="当前会话中所有用户提及信息",
+        default_factory=list
+    )
+    user_preference: Dict[str, str] = Field(
+        title="当前会话的用户偏好信息",
+        default_factory=dict
+    )
+
+
+class UserMemory(BaseModel):
+    """用户级（User Level）记忆"""
+
+    model_config = ConfigDict(extra="allow")
+
+    user_preference: Dict[str, str] = Field(
+        title="基于所有历史行为总结出的用户偏好信息",
+        default_factory=dict
+    )
+    user_profile: Dict[str, str] = Field(
+        title="用户画像",
+        default_factory=dict
+    )
 
 
 class SystemMemory(BaseModel):
-    few_shots: Optional[List[str]] = None
-    domain_knowledge: Optional[List[str]] = None
+    """系统级（System Level）记忆"""
+
+    model_config = ConfigDict(extra="allow")
+
+    few_shots: List[str] = Field(
+        title="针对当前任务的示例",
+        default_factory=list
+    )
+    domain_knowledge: List[str] = Field(
+        title="针对当前任务的领域知识",
+        default_factory=list
+    )
 
 
-class ToolProperty(BaseModel):
-    type: Optional[str]
-    description: Optional[str] = None
-    properties: Optional[Dict[str, "ToolProperty"]] = None  # 支持嵌套对象
-    items: Optional["ToolProperty"] = None  # 支持数组项的类型定义
+class ToolArgument(BaseModel):
+    """工具属性（入参）描述"""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: Optional[str] = Field(
+        title="该参数的数据类型",
+        default=None
+    )
+    description: Optional[str] = Field(
+        title="该参数的描述",
+        default=None
+    )
+    properties: Optional[Dict[str, "ToolArgument"]] = None  # 支持嵌套对象
+    items: Optional["ToolArgument"] = None  # 支持数组项的类型定义
 
 
 class ToolSchema(BaseModel):
-    type: str = "object"
-    properties: Dict[str, ToolProperty] = {}
-    required: List[str] = []
+    """工具的输入输出格式描述"""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str = Field(
+        title="返回值类型",
+        default="object"
+    )
+    arguments: Dict[str, ToolArgument] = Field(
+        title="工具的入参描述",
+        default_factory=dict
+    )
+    required: List[str] = Field(
+        title="调用该工具必须给出的参数",
+        default_factory=list
+    )
 
 
 class Tool(BaseModel):
-    name: str
-    description: Optional[str] = None
-    schema: Optional[ToolSchema] = None
+    """工具描述"""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(
+        title="工具名称"
+    )
+    description: Optional[str] = Field(
+        title="工具的功能描述",
+        default=None
+    )
+    schema: Optional[ToolSchema] = Field(
+        title="工具的输出输出格式信息",
+        default=None
+    )
 
 
-class CandidateIntent(BaseModel):
-    intent: str
-    description: Optional[str] = None
+class Intent(BaseModel):
+    """候选意图描述"""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(
+        title="候选意图名称"
+    )
+    description: Optional[str] = Field(
+        title="候选意图详细描述",
+        default=None
+    )
 
 
 class IntentRequest(BaseModel):
-    query: str
-    candidate_intents: Optional[List[CandidateIntent]] = None
-    tools: Optional[List[Tool]] = None
-    memory: Optional[Memory] = None
-    system_profile: Optional[SystemProfile] = None
-    system_memory: Optional[SystemMemory] = None
+    """意图理解请求"""
+
+    model_config = ConfigDict(extra="allow")
+
+    query: str = Field(
+        title="用户原始输入"
+    )
+    candidate_intents: Optional[List[Intent]] = Field(
+        title="候选意图",
+        default=None
+    )
+    tools: Optional[List[Tool]] = Field(
+        title="可使用的工具集合",
+        default=None
+    )
+    system_profile: Optional[SystemProfile] = Field(
+        title="意图理解模块对应的系统画像信息",
+        default=None
+    )
+    system_memory: Optional[SystemMemory] = Field(
+        title="意图理解模块对应的系统级记忆信息",
+        default=None
+    )
+    user_memory: Optional[UserMemory] = Field(
+        title="用户级记忆信息",
+        default=None
+    )
+    session_memory: Optional[SessionMemory] = Field(
+        title="会话级记忆信息",
+        default=None
+    )
 
 
 class IntentResponse(BaseModel):
-    intent: str
-    candidate_tools: List[Tool]
+    """意图理解模块响应"""
+
+    model_config = ConfigDict(extra="allow")
+
+    intent: Intent = Field(
+        title="基于用户输入解析出的用户意图信息"
+    )
+    candidate_tools: Optional[List[Tool]] = Field(
+        title="基于当前用户意图筛选出的候选工具集合，若具体意图理解模块支持工具筛选可忽略该项",
+        default=None
+    )
+    thinking: Optional[str] = Field(
+        title="意图理解对应的思考信息（如有）",
+        default=None
+    )
 
 
 class ToolCalling(BaseModel):
-    name: str = Field(description="The name of the tool to be called.")
-    arguments: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="A dictionary of arguments to be passed to the tool."
+    """工具调用信息"""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(
+        title="被调用工具的名称"
+    )
+    arguments: Dict[str, Any] = Field(
+        title="调用工具时，传递给工具的参数（key-value格式）",
+        default_factory=dict
     )
 
 
 class PlanningRequest(BaseModel):
-    task: str
-    intent: str
-    tools: List[Tool]
-    memory: Optional[Memory] = None
-    system_profile: Optional[SystemProfile] = None
-    system_memory: Optional[SystemMemory] = None
+    """单次任务规划请求"""
+
+    model_config = ConfigDict(extra="allow")
+
+    task: str = Field(
+        title="任务描述，可以式用户query或改写后的query"
+    )
+    tools: List[Tool] = Field(
+        title="完成该任务的候选工具",
+        default_factory=list
+    )
+    intent: Optional[Intent] = Field(
+        title="用户意图，可以由专用的意图理解模块传入，也可以由规划模块自行解析",
+        default=None
+    )
+    system_profile: Optional[SystemProfile] = Field(
+        title="任务规划模块对应的系统画像信息",
+        default=None
+    )
+    system_memory: Optional[SystemMemory] = Field(
+        title="任务规划模块对应的系统级记忆信息",
+        default=None
+    )
+    user_memory: Optional[UserMemory] = Field(
+        title="用户级记忆信息",
+        default=None
+    )
+    session_memory: Optional[SessionMemory] = Field(
+        title="会话级记忆信息",
+        default=None
+    )
 
 
 class PlanPerTask(BaseModel):
@@ -118,12 +303,11 @@ class PlanningResponse(BaseModel):
 
 
 class ToolExecutingRequest(BaseModel):
-    """Represents a request to execute a tool."""
     tool_call_list: List[ToolCalling] = Field(
         ...,
         description="The list of tools to execute",
     )
-    memory: Optional[Memory] = Field(
+    memory: Optional[SessionMemory] = Field(
         default=None,
         description="The memory"
     )
@@ -152,3 +336,214 @@ class ToolExecutingResponse(BaseModel):
         description="The result of tool executing",
     )
     exec_info_list: List[ExecutionInfo] = Field(..., description="The execution info of tools")
+
+
+class RewritingRequest(BaseModel):
+    """改写模块请求"""
+
+    model_config = ConfigDict(extra="allow")
+
+    content: str = Field(
+        title="原始内容"
+    )
+    system_profile: Optional[SystemProfile] = Field(
+        title="改写模块对应的系统画像信息",
+        default=None
+    )
+    system_memory: Optional[SystemMemory] = Field(
+        title="改写模块对应的系统级记忆信息",
+        default=None
+    )
+    user_memory: Optional[UserMemory] = Field(
+        title="用户级记忆信息",
+        default=None
+    )
+    session_memory: Optional[SessionMemory] = Field(
+        title="会话级记忆信息",
+        default=None
+    )
+
+
+class RewritingResponse(BaseModel):
+    """改写模块响应"""
+
+    model_config = ConfigDict(extra="allow")
+
+    rewritten_content: str = Field(
+        title="改写后的内容"
+    )
+    thinking: Optional[str] = Field(
+        title="改写对应的思考信息（如有）",
+        default=None
+    )
+
+
+class NDArray(BaseModel):
+    """多维数组，可与numpy.ndarray相互转换"""
+
+    data: str = Field(
+        title="数组数据（base64编码的二进制数据）"
+    )
+    dtype: str = Field(
+        title="数据类型"
+    )
+    shape: List[int] = Field(
+        title="数据shape（支持高维数组）"
+    )
+
+    @classmethod
+    def from_array(cls, a: np.ndarray):
+        bin_data = a.tobytes("C")
+        return cls(
+            data=base64.b64encode(bin_data).decode("utf-8"),
+            dtype=str(a.dtype),
+            shape=a.shape
+        )
+
+    def to_array(self) -> np.ndarray:
+        bin_data = base64.b64decode(self.data)
+        return np.frombuffer(
+            buffer=bin_data,
+            dtype=self.dtype
+        ).reshape(self.shape)
+
+
+class CSRArray(BaseModel):
+    """稀疏数组，可与scipy.sparse.csr_array相互转换"""
+
+    data: List[Union[int, float]] = Field(
+        title="数组数据（数据的列表）"
+    )
+    indices: List[int] = Field(
+        title="索引序号"
+    )
+    indptr: List[int] = Field(
+        title="行数据范围"
+    )
+    dtype: str = Field(
+        title="数据类型"
+    )
+    shape: Tuple[int, int] = Field(
+        title="数组shape（仅支持二维数组）"
+    )
+
+    @classmethod
+    def from_array(cls, a: csr_array):
+        return cls(
+            data=a.data,
+            indices=a.indices,
+            indptr=a.indptr,
+            dtype=a.dtype,
+            shape=a.shape
+        )
+
+    def to_array(self) -> csr_array:
+        return csr_array(
+            (self.data, self.indices, self.indptr),
+            dtype=self.dtype,
+            shape=self.shape
+        )
+
+
+class DenseEmbeddingRequest(BaseModel):
+    """稠密向量表征请求"""
+
+    model_config = ConfigDict(extra="allow")
+
+    text: Union[str, List[str]] = Field(
+        title="需要表征的文本"
+    )
+    normalize: bool = Field(
+        title="是否对结果向量进行规一化",
+        default=True
+    )
+
+
+class DenseEmbeddingResponse(BaseModel):
+    """稠密向量表征响应"""
+
+    model_config = ConfigDict(extra="allow")
+
+    embedding: NDArray = Field(
+        title="稠密表征向量（若表征多条文本，则返回矩阵）"
+    )
+
+
+class SparseEmbeddingRequest(BaseModel):
+    """稀疏向量表征请求"""
+
+    model_config = ConfigDict(extra="allow")
+
+    text: Union[str, List[str]] = Field(
+        title="需要表征的文本"
+    )
+
+
+class SparseEmbeddingResponse(BaseModel):
+    """稀疏向量表征响应"""
+
+    model_config = ConfigDict(extra="allow")
+
+    embedding: CSRArray = Field(
+        title="稀疏表征向量（若表征多条文本，则返回矩阵）"
+    )
+
+
+class RetrievalRequest(BaseModel):
+    """知识库检索请求"""
+
+    model_config = ConfigDict(extra="allow")
+
+    collections: List[str] = Field(
+        title="检索的集合，多个取值表示同时从多个集合中检索"
+    )
+    query: str = Field(
+        title="检索Query"
+    )
+    top_k: int = Field(
+        default=6,
+        title="检索返回Top-K",
+        ge=1,
+        le=50
+    )
+    expr: Dict[str, str] = Field(
+        default_factory=dict,
+        title="元数据表达式"
+    )
+    index_fields: List[str] = Field(
+        default=("vector",),
+        title="索引字段的名称，默认为vector，可以指定多个表示混合检索"
+    )
+    output_fields: Optional[List[str]] = Field(
+        default=None,
+        title="检索返回Field字段列表, 默认返回除向量字段以外的所有字段"
+    )
+    use_rerank: bool = Field(
+        default=False,
+        title="是否使用Rerank"
+    )
+    pre_top_k: Optional[int] = Field(
+        default=None,
+        title="Rerank候选集大小",
+        ge=1,
+        le=50
+    )
+
+
+class RetrievalResponse(BaseModel):
+    """知识库检索响应"""
+
+    model_config = ConfigDict(extra="allow")
+
+    distance: List[float] = Field(
+        default_factory=list,
+        title="检索距离"
+    )
+    scores: List[float] = Field(
+        default_factory=list,
+        title="重排分数"
+    )
+    items: List[Dict] = Field(
+        default_factory=list,
+        title="检索对象列表"
+    )
