@@ -285,39 +285,71 @@ class PlanningRequest(BaseModel):
     )
 
 
-class PlanPerTask(BaseModel):
-    """Represents a plan for a specific task."""
-    task: Optional[str] = Field(default=None, description="The task for which the plan is created")
-    plan: Optional[Union[str, List[ToolCalling]]] = Field(
-        default=None,
-        description="The plan on how the agents can execute current task",
+class Plan(BaseModel):
+    """任务规划结果"""
+
+    model_config = ConfigDict(extra="allow")
+
+    tool_callings: List[ToolCalling] = Field(
+        title="完成相应任务的工具调用序列",
+        default_factory=list
+    )
+    fallback: Optional[str] = Field(
+        title="工具调用失败后返回的内容",
+        default=None
+    )
+    thinking: Optional[str] = Field(
+        title="生成该计划的思考信息（如有）",
+        default=None
     )
 
 
 class PlanningResponse(BaseModel):
-    """Planning response"""
-    list_of_plan_per_task: List[PlanPerTask] = Field(
-        ...,
-        description="The plans on how the agents can execute their tasks using the available tools",
+    """任务规划响应"""
+
+    model_config = ConfigDict(extra="allow")
+
+    plans: Union[Plan, List[Plan]] = Field(
+        title="完成该任务的规划，如返回多个Plan对象则表示其包含的子任务的规划",
+        default=None
     )
-    text: str = Field(
-        ...,
-        description="The original textual output of the Planning",
+    thinking: Optional[str] = Field(
+        title="完成该任务的思考信息（如有）",
+        default=None
     )
 
 
 class ToolExecutingRequest(BaseModel):
-    tool_call_list: List[ToolCalling] = Field(
-        ...,
-        description="The list of tools to execute",
+    """工具执行模块请求"""
+
+    model_config = ConfigDict(extra="allow")
+
+    tool_callings: List[ToolCalling] = Field(
+        title="完成相应任务的工具调用序列",
     )
-    memory: Optional[SessionMemory] = Field(
-        default=None,
-        description="The memory"
+    task: Optional[str] = Field(
+        title="原始的任务描述",
+        default=None
     )
-    query: Optional[str] = Field(
-        default=None,
-        description="The user query"
+    intent: Optional[Intent] = Field(
+        title="用户意图",
+        default=None
+    )
+    system_profile: Optional[SystemProfile] = Field(
+        title="工具执行模块对应的系统画像信息",
+        default=None
+    )
+    system_memory: Optional[SystemMemory] = Field(
+        title="工具执行模块对应的系统级记忆信息",
+        default=None
+    )
+    user_memory: Optional[UserMemory] = Field(
+        title="用户级记忆信息",
+        default=None
+    )
+    session_memory: Optional[SessionMemory] = Field(
+        title="会话级记忆信息",
+        default=None
     )
 
 
