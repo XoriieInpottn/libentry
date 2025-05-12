@@ -77,9 +77,9 @@ class SessionMemory(BaseModel):
         title="当前会话中所有用户提及信息",
         default_factory=list
     )
-    user_preference: Dict[str, str] = Field(
+    user_preference: Optional[Dict[str, str]] = Field(
         title="当前会话的用户偏好信息",
-        default_factory=dict
+        default=None
     )
 
 
@@ -88,13 +88,13 @@ class UserMemory(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    user_preference: Dict[str, str] = Field(
+    user_preference: Optional[Dict[str, str]] = Field(
         title="基于所有历史行为总结出的用户偏好信息",
-        default_factory=dict
+        default=None
     )
-    user_profile: Dict[str, str] = Field(
+    user_profile: Optional[Dict[str, str]] = Field(
         title="用户画像",
-        default_factory=dict
+        default=None
     )
 
 
@@ -103,13 +103,17 @@ class SystemMemory(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    few_shots: List[str] = Field(
+    few_shots: Optional[List[str]] = Field(
         title="针对当前任务的示例",
-        default_factory=list
+        default=None
     )
-    domain_knowledge: List[str] = Field(
+    domain_knowledge: Optional[List[str]] = Field(
         title="针对当前任务的领域知识",
-        default_factory=list
+        default=None
+    )
+    reflections: Optional[List[str]] = Field(
+        title="针对当前任务的反思信息",
+        default=None
     )
 
 
