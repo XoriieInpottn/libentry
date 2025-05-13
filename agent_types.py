@@ -288,39 +288,30 @@ class RetrievalResponse(BaseModel):
     )
 
 
-class ToolArgument(BaseModel):
-    """工具属性（入参）描述"""
-
-    model_config = ConfigDict(extra="allow")
-
-    type: Optional[str] = Field(
-        title="该参数的数据类型",
-        default=None
-    )
-    description: Optional[str] = Field(
-        title="该参数的描述",
-        default=None
-    )
-    properties: Optional[Dict[str, "ToolArgument"]] = None  # 支持嵌套对象
-    items: Optional["ToolArgument"] = None  # 支持数组项的类型定义
-
-
-class ToolSchema(BaseModel):
-    """工具的输入输出格式描述"""
+class Property(BaseModel):
+    """工具属性信息"""
 
     model_config = ConfigDict(extra="allow")
 
     type: str = Field(
-        title="返回值类型",
+        title="该属性的数据类型",
         default="object"
     )
-    arguments: Dict[str, ToolArgument] = Field(
-        title="工具的入参描述",
-        default_factory=dict
+    description: Optional[str] = Field(
+        title="该属性的描述",
+        default=None
     )
-    required: List[str] = Field(
-        title="调用该工具必须给出的参数",
-        default_factory=list
+    properties: Optional[Dict[str, "Property"]] = Field(
+        title="如果属性类型为object，该项为其子属性信息",
+        default=None
+    )
+    required: Optional[List[str]] = Field(
+        title="子属性中的必要属性",
+        default=None
+    )
+    items: Optional["Property"] = Field(
+        title="如果属性类型为array，该项为其元素的属性信息",
+        default=None
     )
 
 
@@ -336,8 +327,8 @@ class Tool(BaseModel):
         title="工具的功能描述",
         default=None
     )
-    schema: Optional[ToolSchema] = Field(
-        title="工具的输出输出格式信息",
+    schema: Optional[Property] = Field(
+        title="工具的参数信息",
         default=None
     )
 
