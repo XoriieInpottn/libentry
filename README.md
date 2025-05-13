@@ -1,4 +1,5 @@
 # libentry
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/XoriieInpottn/libentry)
 
 ## Define a Service Class
 1. Define a normal python class.
