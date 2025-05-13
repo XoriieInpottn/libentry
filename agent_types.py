@@ -32,6 +32,40 @@ class SystemProfile(BaseModel):
     )
 
 
+class SystemMemory(BaseModel):
+    """系统级（System Level）记忆"""
+
+    model_config = ConfigDict(extra="allow")
+
+    few_shots: Optional[List[str]] = Field(
+        title="针对当前任务的示例",
+        default=None
+    )
+    domain_knowledge: Optional[List[str]] = Field(
+        title="针对当前任务的领域知识",
+        default=None
+    )
+    reflections: Optional[List[str]] = Field(
+        title="针对当前任务的反思信息",
+        default=None
+    )
+
+
+class UserMemory(BaseModel):
+    """用户级（User Level）记忆"""
+
+    model_config = ConfigDict(extra="allow")
+
+    user_preference: Optional[Dict[str, str]] = Field(
+        title="基于所有历史行为总结出的用户偏好信息",
+        default=None
+    )
+    user_profile: Optional[Dict[str, str]] = Field(
+        title="用户画像",
+        default=None
+    )
+
+
 class ChatMessage(BaseModel):
     """对话消息"""
 
@@ -79,363 +113,6 @@ class SessionMemory(BaseModel):
     )
     user_preference: Optional[Dict[str, str]] = Field(
         title="当前会话的用户偏好信息",
-        default=None
-    )
-
-
-class UserMemory(BaseModel):
-    """用户级（User Level）记忆"""
-
-    model_config = ConfigDict(extra="allow")
-
-    user_preference: Optional[Dict[str, str]] = Field(
-        title="基于所有历史行为总结出的用户偏好信息",
-        default=None
-    )
-    user_profile: Optional[Dict[str, str]] = Field(
-        title="用户画像",
-        default=None
-    )
-
-
-class SystemMemory(BaseModel):
-    """系统级（System Level）记忆"""
-
-    model_config = ConfigDict(extra="allow")
-
-    few_shots: Optional[List[str]] = Field(
-        title="针对当前任务的示例",
-        default=None
-    )
-    domain_knowledge: Optional[List[str]] = Field(
-        title="针对当前任务的领域知识",
-        default=None
-    )
-    reflections: Optional[List[str]] = Field(
-        title="针对当前任务的反思信息",
-        default=None
-    )
-
-
-class ToolArgument(BaseModel):
-    """工具属性（入参）描述"""
-
-    model_config = ConfigDict(extra="allow")
-
-    type: Optional[str] = Field(
-        title="该参数的数据类型",
-        default=None
-    )
-    description: Optional[str] = Field(
-        title="该参数的描述",
-        default=None
-    )
-    properties: Optional[Dict[str, "ToolArgument"]] = None  # 支持嵌套对象
-    items: Optional["ToolArgument"] = None  # 支持数组项的类型定义
-
-
-class ToolSchema(BaseModel):
-    """工具的输入输出格式描述"""
-
-    model_config = ConfigDict(extra="allow")
-
-    type: str = Field(
-        title="返回值类型",
-        default="object"
-    )
-    arguments: Dict[str, ToolArgument] = Field(
-        title="工具的入参描述",
-        default_factory=dict
-    )
-    required: List[str] = Field(
-        title="调用该工具必须给出的参数",
-        default_factory=list
-    )
-
-
-class Tool(BaseModel):
-    """工具描述"""
-
-    model_config = ConfigDict(extra="allow")
-
-    name: str = Field(
-        title="工具名称"
-    )
-    description: Optional[str] = Field(
-        title="工具的功能描述",
-        default=None
-    )
-    schema: Optional[ToolSchema] = Field(
-        title="工具的输出输出格式信息",
-        default=None
-    )
-
-
-class Intent(BaseModel):
-    """候选意图描述"""
-
-    model_config = ConfigDict(extra="allow")
-
-    name: str = Field(
-        title="候选意图名称"
-    )
-    description: Optional[str] = Field(
-        title="候选意图详细描述",
-        default=None
-    )
-
-
-class IntentRequest(BaseModel):
-    """意图理解请求"""
-
-    model_config = ConfigDict(extra="allow")
-
-    query: str = Field(
-        title="用户原始输入"
-    )
-    candidate_intents: Optional[List[Intent]] = Field(
-        title="候选意图",
-        default=None
-    )
-    tools: Optional[List[Tool]] = Field(
-        title="可使用的工具集合",
-        default=None
-    )
-    system_profile: Optional[SystemProfile] = Field(
-        title="意图理解模块对应的系统画像信息",
-        default=None
-    )
-    system_memory: Optional[SystemMemory] = Field(
-        title="意图理解模块对应的系统级记忆信息",
-        default=None
-    )
-    user_memory: Optional[UserMemory] = Field(
-        title="用户级记忆信息",
-        default=None
-    )
-    session_memory: Optional[SessionMemory] = Field(
-        title="会话级记忆信息",
-        default=None
-    )
-
-
-class IntentResponse(BaseModel):
-    """意图理解模块响应"""
-
-    model_config = ConfigDict(extra="allow")
-
-    intent: Intent = Field(
-        title="基于用户输入解析出的用户意图信息"
-    )
-    candidate_tools: Optional[List[Tool]] = Field(
-        title="基于当前用户意图筛选出的候选工具集合，若具体意图理解模块支持工具筛选可忽略该项",
-        default=None
-    )
-    thinking: Optional[str] = Field(
-        title="意图理解对应的思考信息（如有）",
-        default=None
-    )
-
-
-class ToolCalling(BaseModel):
-    """工具调用信息"""
-
-    model_config = ConfigDict(extra="allow")
-
-    name: str = Field(
-        title="被调用工具的名称"
-    )
-    arguments: Dict[str, Any] = Field(
-        title="调用工具时，传递给工具的参数（key-value格式）",
-        default_factory=dict
-    )
-
-
-class PlanningRequest(BaseModel):
-    """单次任务规划请求"""
-
-    model_config = ConfigDict(extra="allow")
-
-    task: str = Field(
-        title="任务描述，可以式用户query或改写后的query"
-    )
-    tools: List[Tool] = Field(
-        title="完成该任务的候选工具",
-        default_factory=list
-    )
-    intent: Optional[Intent] = Field(
-        title="用户意图，可以由专用的意图理解模块传入，也可以由规划模块自行解析",
-        default=None
-    )
-    system_profile: Optional[SystemProfile] = Field(
-        title="任务规划模块对应的系统画像信息",
-        default=None
-    )
-    system_memory: Optional[SystemMemory] = Field(
-        title="任务规划模块对应的系统级记忆信息",
-        default=None
-    )
-    user_memory: Optional[UserMemory] = Field(
-        title="用户级记忆信息",
-        default=None
-    )
-    session_memory: Optional[SessionMemory] = Field(
-        title="会话级记忆信息",
-        default=None
-    )
-
-
-class Plan(BaseModel):
-    """任务规划结果"""
-
-    model_config = ConfigDict(extra="allow")
-
-    tool_callings: List[ToolCalling] = Field(
-        title="完成相应任务的工具调用序列",
-        default_factory=list
-    )
-    fallback: Optional[str] = Field(
-        title="工具调用失败后返回的内容",
-        default=None
-    )
-    thinking: Optional[str] = Field(
-        title="生成该计划的思考信息（如有）",
-        default=None
-    )
-
-
-class PlanningResponse(BaseModel):
-    """任务规划响应"""
-
-    model_config = ConfigDict(extra="allow")
-
-    plans: Union[Plan, List[Plan]] = Field(
-        title="完成该任务的规划，如返回多个Plan对象则表示其包含的子任务的规划",
-        default=None
-    )
-    thinking: Optional[str] = Field(
-        title="完成该任务的思考信息（如有）",
-        default=None
-    )
-
-
-class ToolExecutingRequest(BaseModel):
-    """工具执行模块请求"""
-
-    model_config = ConfigDict(extra="allow")
-
-    tool_callings: List[ToolCalling] = Field(
-        title="完成相应任务的工具调用序列",
-    )
-    task: Optional[str] = Field(
-        title="原始的任务描述",
-        default=None
-    )
-    intent: Optional[Intent] = Field(
-        title="用户意图",
-        default=None
-    )
-    system_profile: Optional[SystemProfile] = Field(
-        title="工具执行模块对应的系统画像信息",
-        default=None
-    )
-    system_memory: Optional[SystemMemory] = Field(
-        title="工具执行模块对应的系统级记忆信息",
-        default=None
-    )
-    user_memory: Optional[UserMemory] = Field(
-        title="用户级记忆信息",
-        default=None
-    )
-    session_memory: Optional[SessionMemory] = Field(
-        title="会话级记忆信息",
-        default=None
-    )
-
-
-class ExecutionError(BaseModel):
-    """执行错误信息对象"""
-
-    model_config = ConfigDict(extra="allow")
-
-    message: str = Field(
-        title="错误信息"
-    )
-    error: Optional[str] = Field(
-        title="错误（异常）名称",
-        default=None
-    )
-    traceback: Optional[str] = Field(
-        title="错误相关的详细信息",
-        default=None
-    )
-
-
-class ExecutionStatus(BaseModel):
-    """执行状态信息对象"""
-
-    model_config = ConfigDict(extra="allow")
-
-    name: str = Field(
-        title="被执行工具的名称"
-    )
-    result: Optional[Any] = Field(
-        title="工具执行结果",
-        default=None
-    )
-    error: Optional[ExecutionError] = Field(
-        title="工具执行错误信息",
-        default=None
-    )
-
-
-class ToolExecutingResponse(BaseModel):
-    """工具执行模块响应对象"""
-
-    model_config = ConfigDict(extra="allow")
-
-    status: List[ExecutionStatus] = Field(
-        title="各工具执行状态",
-        default_factory=list
-    )
-
-
-class RewritingRequest(BaseModel):
-    """改写模块请求"""
-
-    model_config = ConfigDict(extra="allow")
-
-    content: str = Field(
-        title="原始内容"
-    )
-    system_profile: Optional[SystemProfile] = Field(
-        title="改写模块对应的系统画像信息",
-        default=None
-    )
-    system_memory: Optional[SystemMemory] = Field(
-        title="改写模块对应的系统级记忆信息",
-        default=None
-    )
-    user_memory: Optional[UserMemory] = Field(
-        title="用户级记忆信息",
-        default=None
-    )
-    session_memory: Optional[SessionMemory] = Field(
-        title="会话级记忆信息",
-        default=None
-    )
-
-
-class RewritingResponse(BaseModel):
-    """改写模块响应"""
-
-    model_config = ConfigDict(extra="allow")
-
-    rewritten_content: str = Field(
-        title="改写后的内容"
-    )
-    thinking: Optional[str] = Field(
-        title="改写对应的思考信息（如有）",
         default=None
     )
 
@@ -608,4 +285,327 @@ class RetrievalResponse(BaseModel):
     items: List[Dict] = Field(
         default_factory=list,
         title="检索对象列表"
+    )
+
+
+class ToolArgument(BaseModel):
+    """工具属性（入参）描述"""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: Optional[str] = Field(
+        title="该参数的数据类型",
+        default=None
+    )
+    description: Optional[str] = Field(
+        title="该参数的描述",
+        default=None
+    )
+    properties: Optional[Dict[str, "ToolArgument"]] = None  # 支持嵌套对象
+    items: Optional["ToolArgument"] = None  # 支持数组项的类型定义
+
+
+class ToolSchema(BaseModel):
+    """工具的输入输出格式描述"""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str = Field(
+        title="返回值类型",
+        default="object"
+    )
+    arguments: Dict[str, ToolArgument] = Field(
+        title="工具的入参描述",
+        default_factory=dict
+    )
+    required: List[str] = Field(
+        title="调用该工具必须给出的参数",
+        default_factory=list
+    )
+
+
+class Tool(BaseModel):
+    """工具描述"""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(
+        title="工具名称"
+    )
+    description: Optional[str] = Field(
+        title="工具的功能描述",
+        default=None
+    )
+    schema: Optional[ToolSchema] = Field(
+        title="工具的输出输出格式信息",
+        default=None
+    )
+
+
+class Intent(BaseModel):
+    """候选意图描述"""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(
+        title="候选意图名称"
+    )
+    description: Optional[str] = Field(
+        title="候选意图详细描述",
+        default=None
+    )
+
+
+class IntentRequest(BaseModel):
+    """意图理解请求"""
+
+    model_config = ConfigDict(extra="allow")
+
+    query: str = Field(
+        title="用户原始输入"
+    )
+    candidate_intents: Optional[List[Intent]] = Field(
+        title="候选意图",
+        default=None
+    )
+    tools: Optional[List[Tool]] = Field(
+        title="可使用的工具集合",
+        default=None
+    )
+    system_profile: Optional[SystemProfile] = Field(
+        title="意图理解模块对应的系统画像信息",
+        default=None
+    )
+    system_memory: Optional[SystemMemory] = Field(
+        title="意图理解模块对应的系统级记忆信息",
+        default=None
+    )
+    user_memory: Optional[UserMemory] = Field(
+        title="用户级记忆信息",
+        default=None
+    )
+    session_memory: Optional[SessionMemory] = Field(
+        title="会话级记忆信息",
+        default=None
+    )
+
+
+class IntentResponse(BaseModel):
+    """意图理解模块响应"""
+
+    model_config = ConfigDict(extra="allow")
+
+    intent: Intent = Field(
+        title="基于用户输入解析出的用户意图信息"
+    )
+    candidate_tools: Optional[List[Tool]] = Field(
+        title="基于当前用户意图筛选出的候选工具集合，若具体意图理解模块支持工具筛选可忽略该项",
+        default=None
+    )
+    thinking: Optional[str] = Field(
+        title="意图理解对应的思考信息（如有）",
+        default=None
+    )
+
+
+class PlanningRequest(BaseModel):
+    """单次任务规划请求"""
+
+    model_config = ConfigDict(extra="allow")
+
+    task: str = Field(
+        title="任务描述，可以式用户query或改写后的query"
+    )
+    tools: List[Tool] = Field(
+        title="完成该任务的候选工具",
+        default_factory=list
+    )
+    intent: Optional[Intent] = Field(
+        title="用户意图，可以由专用的意图理解模块传入，也可以由规划模块自行解析",
+        default=None
+    )
+    system_profile: Optional[SystemProfile] = Field(
+        title="任务规划模块对应的系统画像信息",
+        default=None
+    )
+    system_memory: Optional[SystemMemory] = Field(
+        title="任务规划模块对应的系统级记忆信息",
+        default=None
+    )
+    user_memory: Optional[UserMemory] = Field(
+        title="用户级记忆信息",
+        default=None
+    )
+    session_memory: Optional[SessionMemory] = Field(
+        title="会话级记忆信息",
+        default=None
+    )
+
+
+class ToolCalling(BaseModel):
+    """工具调用信息"""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(
+        title="被调用工具的名称"
+    )
+    arguments: Dict[str, Any] = Field(
+        title="调用工具时，传递给工具的参数（key-value格式）",
+        default_factory=dict
+    )
+
+
+class Plan(BaseModel):
+    """任务规划结果"""
+
+    model_config = ConfigDict(extra="allow")
+
+    tool_callings: List[ToolCalling] = Field(
+        title="完成相应任务的工具调用序列",
+        default_factory=list
+    )
+    fallback: Optional[str] = Field(
+        title="工具调用失败后返回的内容",
+        default=None
+    )
+    thinking: Optional[str] = Field(
+        title="生成该计划的思考信息（如有）",
+        default=None
+    )
+
+
+class PlanningResponse(BaseModel):
+    """任务规划响应"""
+
+    model_config = ConfigDict(extra="allow")
+
+    plans: Union[Plan, List[Plan]] = Field(
+        title="完成该任务的规划，如返回多个Plan对象则表示其包含的子任务的规划",
+        default=None
+    )
+    thinking: Optional[str] = Field(
+        title="完成该任务的思考信息（如有）",
+        default=None
+    )
+
+
+class ToolExecutingRequest(BaseModel):
+    """工具执行模块请求"""
+
+    model_config = ConfigDict(extra="allow")
+
+    tool_callings: List[ToolCalling] = Field(
+        title="完成相应任务的工具调用序列",
+    )
+    task: Optional[str] = Field(
+        title="原始的任务描述",
+        default=None
+    )
+    intent: Optional[Intent] = Field(
+        title="用户意图",
+        default=None
+    )
+    system_profile: Optional[SystemProfile] = Field(
+        title="工具执行模块对应的系统画像信息",
+        default=None
+    )
+    system_memory: Optional[SystemMemory] = Field(
+        title="工具执行模块对应的系统级记忆信息",
+        default=None
+    )
+    user_memory: Optional[UserMemory] = Field(
+        title="用户级记忆信息",
+        default=None
+    )
+    session_memory: Optional[SessionMemory] = Field(
+        title="会话级记忆信息",
+        default=None
+    )
+
+
+class ExecutionError(BaseModel):
+    """执行错误信息对象"""
+
+    model_config = ConfigDict(extra="allow")
+
+    message: str = Field(
+        title="错误信息"
+    )
+    error: Optional[str] = Field(
+        title="错误（异常）名称",
+        default=None
+    )
+    traceback: Optional[str] = Field(
+        title="错误相关的详细信息",
+        default=None
+    )
+
+
+class ExecutionStatus(BaseModel):
+    """执行状态信息对象"""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(
+        title="被执行工具的名称"
+    )
+    result: Optional[Any] = Field(
+        title="工具执行结果",
+        default=None
+    )
+    error: Optional[ExecutionError] = Field(
+        title="工具执行错误信息",
+        default=None
+    )
+
+
+class ToolExecutingResponse(BaseModel):
+    """工具执行模块响应对象"""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: List[ExecutionStatus] = Field(
+        title="各工具执行状态",
+        default_factory=list
+    )
+
+
+class RewritingRequest(BaseModel):
+    """改写模块请求"""
+
+    model_config = ConfigDict(extra="allow")
+
+    content: str = Field(
+        title="原始内容"
+    )
+    system_profile: Optional[SystemProfile] = Field(
+        title="改写模块对应的系统画像信息",
+        default=None
+    )
+    system_memory: Optional[SystemMemory] = Field(
+        title="改写模块对应的系统级记忆信息",
+        default=None
+    )
+    user_memory: Optional[UserMemory] = Field(
+        title="用户级记忆信息",
+        default=None
+    )
+    session_memory: Optional[SessionMemory] = Field(
+        title="会话级记忆信息",
+        default=None
+    )
+
+
+class RewritingResponse(BaseModel):
+    """改写模块响应"""
+
+    model_config = ConfigDict(extra="allow")
+
+    rewritten_content: str = Field(
+        title="改写后的内容"
+    )
+    thinking: Optional[str] = Field(
+        title="改写对应的思考信息（如有）",
+        default=None
     )
