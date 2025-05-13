@@ -353,25 +353,51 @@ class ToolExecutingRequest(BaseModel):
     )
 
 
-class ExecutionInfo(BaseModel):
-    success: bool = Field(..., description="whether successful")
-    name: Optional[str] = Field(None, description="tool name")
-    arguments: Optional[Dict[str, Any]] = Field(None, description="tool arguments")
-    error_message: Optional[str] = Field(None, description="error message")
-    error_code: Optional[int] = Field(None, description="error code")
+class ExecutionError(BaseModel):
+    """执行错误信息对象"""
 
-    def __str__(self):
-        status = "success" if self.success else f"failed (code: {self.error_code}, error info: {self.error_message})"
-        return f"[{self.name or 'Unknown Tool'}] execute status: {status}"
+    model_config = ConfigDict(extra="allow")
+
+    message: str = Field(
+        title="错误信息"
+    )
+    error: Optional[str] = Field(
+        title="错误（异常）名称",
+        default=None
+    )
+    traceback: Optional[str] = Field(
+        title="错误相关的详细信息",
+        default=None
+    )
+
+
+class ExecutionStatus(BaseModel):
+    """执行状态信息对象"""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(
+        title="被执行工具的名称"
+    )
+    result: Optional[Any] = Field(
+        title="工具执行结果",
+        default=None
+    )
+    error: Optional[ExecutionError] = Field(
+        title="工具执行错误信息",
+        default=None
+    )
 
 
 class ToolExecutingResponse(BaseModel):
-    """tool executing response."""
-    result_list: List[Any] = Field(
-        ...,
-        description="The result of tool executing",
+    """工具执行模块响应对象"""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: List[ExecutionStatus] = Field(
+        title="各工具执行状态",
+        default_factory=list
     )
-    exec_info_list: List[ExecutionInfo] = Field(..., description="The execution info of tools")
 
 
 class RewritingRequest(BaseModel):
