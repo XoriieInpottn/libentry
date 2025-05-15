@@ -271,7 +271,7 @@ class UserMemory(BaseModel):
         default=None
     )
     user_profile: Optional[Dict[str, str]] = Field(
-        title="用户户思想",
+        title="用户画像",
         description="基于所有历史行为总结出的用户画像信息",
         default=None
     )
