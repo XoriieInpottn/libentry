@@ -6,12 +6,11 @@ from typing import Dict, Optional, Union
 
 from pydantic import ConfigDict, Field
 
-from agent_types.common import Request, Response, SessionMemory, SystemMemory, \
-    SystemProfile, UserMemory
+from agent_types.common import Request, Response, SessionMemory, SystemMemory, SystemProfile, UserMemory
 
 
 class ReadUserMemoryRequest(Request):
-    """读取用户记忆请求"""
+    """一次性读取用户记忆"""
 
     model_config = ConfigDict(extra="allow")
 
@@ -27,18 +26,18 @@ class ReadUserMemoryRequest(Request):
 
 
 class ReadUserMemoryResponse(Response):
-    """读取用户记忆响应"""
+    """一次性读取用户记忆"""
 
     model_config = ConfigDict(extra="allow")
 
     user_memory: UserMemory = Field(
-        title="输出用户记忆对象",
-        description="若在请求中给定了source_memory，则其内容会被整合到output_memory中"
+        title="读取后的用户记忆对象",
+        description="无论在请求读取时候是否给定当前记忆，都会返回"
     )
 
 
 class ReadUserPreferenceRequest(Request):
-    """读取用户偏好请求"""
+    """读取用户偏好"""
 
     model_config = ConfigDict(extra="allow")
 
@@ -47,14 +46,14 @@ class ReadUserPreferenceRequest(Request):
         description="用户标识"
     )
     user_memory: Optional[UserMemory] = Field(
-        title="源记忆对象",
+        title="当前用户记忆对象",
         description="若给定，则该内容会被整合到响应对象中",
         default=None
     )
 
 
 class ReadUserPreferenceResponse(Response):
-    """用户偏好读取响应"""
+    """读取用户偏好"""
 
     model_config = ConfigDict(extra="allow")
 
@@ -63,8 +62,95 @@ class ReadUserPreferenceResponse(Response):
         description="读取到的用户偏好信息"
     )
     user_memory: Optional[UserMemory] = Field(
-        title="输出记忆对象",
-        description="若在请求中给定了source_memory，则其内容会被整合到output_memory中"
+        title="读取后的用户记忆对象",
+        description="若在请求中给定了当前记忆，则这里返回的是整合后的记忆对象",
+        default=None
+    )
+
+
+class ReadUserProfileRequest(Request):
+    """读取用户画像"""
+
+    model_config = ConfigDict(extra="allow")
+
+    user_id: Union[str, int] = Field(
+        title="用户标识",
+        description="用户标识"
+    )
+    user_memory: Optional[UserMemory] = Field(
+        title="当前用户记忆对象",
+        description="若给定，则该内容会被整合到响应对象中",
+        default=None
+    )
+
+
+class ReadUserProfileResponse(Response):
+    """用户画像读取响应"""
+
+    model_config = ConfigDict(extra="allow")
+
+    user_profile: Dict[str, str] = Field(
+        title="用户画像",
+        description="读取到的用户画像信息"
+    )
+    user_memory: Optional[UserMemory] = Field(
+        title="读取后的用户记忆对象",
+        description="若在请求中给定了当前记忆，则这里返回的是整合后的记忆对象",
+        default=None
+    )
+
+
+class WriteUserPreferenceRequest(Request):
+    """写入用户偏好"""
+
+    model_config = ConfigDict(extra="allow")
+
+    user_id: Union[str, int] = Field(
+        title="用户标识",
+        description="用户标识"
+    )
+    user_preference: Dict[str, str] = Field(
+        title="用户偏好",
+        description="要写入的用户偏好，需要在调用写入之前先进行提取",
+    )
+
+
+class WriteUserPreferenceResponse(Response):
+    """写入用户偏好"""
+
+    model_config = ConfigDict(extra="allow")
+
+    num_written: Optional[int] = Field(
+        title="成功写入数量",
+        description="成功写入数量，可以不给出",
+        default=None
+    )
+
+
+class WriteUserProfileRequest(Request):
+    """写入用户画像"""
+
+    model_config = ConfigDict(extra="allow")
+
+    user_id: Union[str, int] = Field(
+        title="用户标识",
+        description="用户标识"
+    )
+    user_profile: Dict[str, str] = Field(
+        title="用户画像",
+        description="要写入的用户画像，需要在调用写入之前先进行提取"
+    )
+
+
+class WriteUserProfileResponse(Response):
+    """写入用户画像"""
+
+    model_config = ConfigDict(extra="allow")
+
+    num_written: Optional[int] = Field(
+        title="成功写入数量",
+        description="成功写入数量，可以不给出",
+        default=None
     )
 
 
@@ -108,37 +194,6 @@ class ExtractUserPreferenceResponse(Response):
         title="用户偏好信息",
         description="用户偏好信息，如果在请求时给定了collection，则可以不返回",
         default=None
-    )
-
-
-class ReadUserProfileRequest(Request):
-    """用户画像读取请求"""
-
-    model_config = ConfigDict(extra="allow")
-
-    user_id: Union[str, int] = Field(
-        title="用户标识",
-        description="用户标识"
-    )
-    user_memory: Optional[UserMemory] = Field(
-        title="源记忆对象",
-        description="若给定，则该内容会被整合到响应对象中",
-        default=None
-    )
-
-
-class ReadUserProfileResponse(Response):
-    """用户画像读取响应"""
-
-    model_config = ConfigDict(extra="allow")
-
-    user_profile: Dict[str, str] = Field(
-        title="用户画像",
-        description="读取到的用户画像信息"
-    )
-    user_memory: Optional[UserMemory] = Field(
-        title="输出记忆对象",
-        description="若在请求中给定了source_memory，则其内容会被整合到output_memory中"
     )
 
 

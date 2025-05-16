@@ -49,33 +49,6 @@ class ReadFewShotsResponse(Response):
     )
 
 
-class WriteFewShotsRequest(Request):
-    """写入示例请求"""
-
-    model_config = ConfigDict(extra="allow")
-
-    collection: str = Field(
-        title="集合名称",
-        description="用于存储写入示例的集合名称"
-    )
-    few_shots: List[FewShot] = Field(
-        title="示例内容",
-        description="写入的示例内容"
-    )
-
-
-class WriteFewShotsResponse(Response):
-    """示例写入响应"""
-
-    model_config = ConfigDict(extra="allow")
-
-    num_written: Optional[int] = Field(
-        title="成功写入数量",
-        description="成功写入数量，可以不给出",
-        default=None
-    )
-
-
 class ReadDomainKnowledgeRequest(Request):
     """读取领域知识请求"""
 
@@ -116,33 +89,6 @@ class ReadDomainKnowledgeResponse(Response):
     )
 
 
-class WriteDomainKnowledgeRequest(Request):
-    """写入领域知识请求"""
-
-    model_config = ConfigDict(extra="allow")
-
-    collection: str = Field(
-        title="集合名称",
-        description="用于存储写入示例的集合名称"
-    )
-    domain_knowledge: List[str] = Field(
-        title="领域知识内容",
-        description="写入的领域知识内容"
-    )
-
-
-class WriteDomainKnowledgeResponse(Response):
-    """写入领域知识响应"""
-
-    model_config = ConfigDict(extra="allow")
-
-    num_written: Optional[int] = Field(
-        title="成功写入数量",
-        description="成功写入数量，可以不给出",
-        default=None
-    )
-
-
 class ReadReflectionsRequest(Request):
     """读取反思内容请求"""
 
@@ -179,6 +125,60 @@ class ReadReflectionsResponse(Response):
     system_memory: Optional[SystemMemory] = Field(
         title="输出系统记忆对象",
         description="只有请求时指定了当前记忆，这里才会输出",
+        default=None
+    )
+
+
+class WriteFewShotsRequest(Request):
+    """写入示例请求"""
+
+    model_config = ConfigDict(extra="allow")
+
+    collection: str = Field(
+        title="集合名称",
+        description="用于存储写入示例的集合名称"
+    )
+    few_shots: List[FewShot] = Field(
+        title="示例内容",
+        description="写入的示例内容"
+    )
+
+
+class WriteFewShotsResponse(Response):
+    """示例写入响应"""
+
+    model_config = ConfigDict(extra="allow")
+
+    num_written: Optional[int] = Field(
+        title="成功写入数量",
+        description="成功写入数量，可以不给出",
+        default=None
+    )
+
+
+class WriteDomainKnowledgeRequest(Request):
+    """写入领域知识请求"""
+
+    model_config = ConfigDict(extra="allow")
+
+    collection: str = Field(
+        title="集合名称",
+        description="用于存储写入示例的集合名称"
+    )
+    domain_knowledge: List[str] = Field(
+        title="领域知识内容",
+        description="写入的领域知识内容"
+    )
+
+
+class WriteDomainKnowledgeResponse(Response):
+    """写入领域知识响应"""
+
+    model_config = ConfigDict(extra="allow")
+
+    num_written: Optional[int] = Field(
+        title="成功写入数量",
+        description="成功写入数量，可以不给出",
         default=None
     )
 
