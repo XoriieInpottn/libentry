@@ -18,7 +18,7 @@ from agent_types.common import Request, Response
 class NERRequest(Request):
     """实体抽取请求"""
 
-    model_config = ConfigDict()
+    model_config = ConfigDict(extra="allow")
 
     query: str = Field(
         title="用户查询",
@@ -29,7 +29,7 @@ class NERRequest(Request):
 class NERResponse(Response):
     """实体抽取响应"""
 
-    model_config = ConfigDict()
+    model_config = ConfigDict(extra="allow")
 
     entities: List[str] = Field(
         title="实体列表",
@@ -41,7 +41,7 @@ class NERResponse(Response):
 class ItemMatchRequest(Request):
     """Item Match请求"""
 
-    model_config = ConfigDict()
+    model_config = ConfigDict(extra="allow")
 
     query: str = Field(
         title="用户查询",
@@ -57,7 +57,7 @@ class ItemMatchRequest(Request):
 class ItemMatchResponse(Response):
     """Item Match响应"""
 
-    model_config = ConfigDict()
+    model_config = ConfigDict(extra="allow")
 
     matches: List[str] = Field(
         title="匹配结果列表",

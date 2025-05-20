@@ -20,6 +20,7 @@ __all__ = [
     "Plan",
     "ExecutionError",
     "ExecutionStatus",
+    "GenerationOptions",
 ]
 
 import base64
@@ -420,4 +421,17 @@ class ExecutionStatus(BaseModel):
         title="错误信息",
         description="工具执行错误信息，如果错误信息不为空，则执行结果无效",
         default=None
+    )
+
+
+class GenerationOptions(BaseModel):
+    """LLM生成的相关选项"""
+
+    model_config = ConfigDict(extra="allow")
+
+    temperature: Optional[float] = Field(
+        title="采样温度",
+        description="如果为空或者0，表示不采样",
+        default=None,
+        ge=0.0
     )
