@@ -357,6 +357,11 @@ class ToolCalling(BaseModel):
         description="调用工具时，传递给工具的参数（key-value格式）",
         default_factory=dict
     )
+    fallback: Optional[str] = Field(
+        title="兜底信息",
+        description="工具调用失败后返回的内容",
+        default=None
+    )
 
 
 class Plan(BaseModel):
@@ -368,11 +373,6 @@ class Plan(BaseModel):
         title="工具调用序列",
         description="完成相应任务的工具调用序列",
         default_factory=list
-    )
-    fallback: Optional[str] = Field(
-        title="兜底信息",
-        description="工具调用失败后返回的内容",
-        default=None
     )
     thinking: Optional[str] = Field(
         title="思考过程",
