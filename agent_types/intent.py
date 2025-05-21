@@ -59,13 +59,13 @@ class IntentResponse(Response):
 
     model_config = ConfigDict(extra="allow")
 
-    intent: Intent = Field(
+    intents: List[Intent] = Field(
         title="意图",
-        description="基于用户输入解析出的用户意图信息"
+        description="支持多个意图"
     )
-    candidate_tools: Optional[List[Tool]] = Field(
+    candidate_tools: Optional[List[List[Tool]]] = Field(
         title="候选工具集合",
-        description="基于当前用户意图筛选出的候选工具集合，若具体意图理解模块支持工具筛选可忽略该项",
+        description="基于当前用户意图筛选出的候选工具集合，intents中的每个意图都对应各自的候选工具集",
         default=None
     )
     thinking: Optional[str] = Field(
