@@ -352,9 +352,14 @@ class ToolCalling(BaseModel):
         title="工具名称",
         description="被调用工具的名称"
     )
-    arguments: Dict[str, Any] = Field(
+    arguments: Dict[str, Union[str, "ToolCalling", None]] = Field(
         title="调用参数",
-        description="调用工具时，传递给工具的参数（key-value格式）",
+        description=(
+            "参数名->参数值，参数值有3种情况："
+            "为字符串时表示正常参数，需要执行模块转换成对应数据类型，例如json或python的eval()；"
+            "为ToolCalling对象时候，表示依赖该工具调用输出的结果；"
+            "为空表示不确定，需要执行模块动态解析"
+        ),
         default_factory=dict
     )
 
