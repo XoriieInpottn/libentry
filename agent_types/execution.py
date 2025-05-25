@@ -11,7 +11,7 @@ from typing import List, Optional
 from pydantic import ConfigDict, Field
 
 from agent_types.common import ExecutionStatus, Intent, Request, Response, SessionMemory, SystemMemory, SystemProfile, \
-    ToolCalling, UserMemory
+    Tool, ToolCalling, UserMemory
 
 
 class ToolExecutingRequest(Request):
@@ -64,4 +64,21 @@ class ToolExecutingResponse(Response):
         title="执行状态",
         description="各工具执行状态，可以用最后一个状态表示最终执行状态",
         default_factory=list
+    )
+
+
+class ListToolsRequest(Request):
+    """列出所有工具"""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class ListToolsResponse(Response):
+    """列出所有工具"""
+
+    model_config = ConfigDict(extra="allow")
+
+    tools: List[Tool] = Field(
+        title="工具列表",
+        description="所有支持MCP协议的工具列表，包括内部的和第三方的"
     )

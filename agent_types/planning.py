@@ -10,8 +10,8 @@ from typing import List, Optional, Union
 
 from pydantic import ConfigDict, Field
 
-from agent_types.common import Intent, Plan, Request, Response, SessionMemory, SystemMemory, SystemProfile, Tool, \
-    UserMemory
+from agent_types.common import ExecutionStatus, Intent, Plan, Request, Response, SessionMemory, SystemMemory, \
+    SystemProfile, Tool, UserMemory
 
 
 class PlanningRequest(Request):
@@ -31,6 +31,11 @@ class PlanningRequest(Request):
     intent: Optional[Intent] = Field(
         title="用户意图",
         description="用户意图，可以由专用的意图理解模块传入，也可以由规划模块自行解析",
+        default=None
+    )
+    execution_status: Optional[List[ExecutionStatus]] = Field(
+        title="执行状态",
+        description="如果之前的Plan已经执行过，但存在错误，可以传给Planning参考以进行模块重新规划",
         default=None
     )
     system_profile: Optional[SystemProfile] = Field(

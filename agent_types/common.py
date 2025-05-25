@@ -20,6 +20,7 @@ __all__ = [
     "Plan",
     "ExecutionError",
     "ExecutionStatus",
+    "GenerationOptions",
 ]
 
 import base64
@@ -362,6 +363,11 @@ class ToolCalling(BaseModel):
         ),
         default_factory=dict
     )
+    fallback: Optional[str] = Field(
+        title="兜底信息",
+        description="工具调用失败后返回的内容",
+        default=None
+    )
 
 
 class Plan(BaseModel):
@@ -373,11 +379,6 @@ class Plan(BaseModel):
         title="工具调用序列",
         description="完成相应任务的工具调用序列",
         default_factory=list
-    )
-    fallback: Optional[str] = Field(
-        title="兜底信息",
-        description="工具调用失败后返回的内容",
-        default=None
     )
     thinking: Optional[str] = Field(
         title="思考过程",
@@ -425,4 +426,17 @@ class ExecutionStatus(BaseModel):
         title="错误信息",
         description="工具执行错误信息，如果错误信息不为空，则执行结果无效",
         default=None
+    )
+
+
+class GenerationOptions(BaseModel):
+    """LLM生成的相关选项"""
+
+    model_config = ConfigDict(extra="allow")
+
+    temperature: Optional[float] = Field(
+        title="采样温度",
+        description="如果为空或者0，表示不采样",
+        default=None,
+        ge=0.0
     )
