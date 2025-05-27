@@ -11,6 +11,7 @@ if __name__ == '__main__':
         name='libentry',
         packages=[
             'libentry',
+            "libentry.mcp",
             "libentry.service"
         ],
         entry_points={
@@ -18,7 +19,7 @@ if __name__ == '__main__':
                 'libentry_test_api = libentry.test_api:main'
             ]
         },
-        version='1.22.4',
+        version='1.23',
         description='Entries for experimental utilities.',
         long_description_content_type='text/markdown',
         long_description=long_description,
