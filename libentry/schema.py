@@ -152,7 +152,8 @@ def _parse_dict(context: ParseContext) -> Optional[str]:
             key_type = "str"
             value_type = parse_type(dict_args[1], context.schemas)
             if isinstance(value_type, list):
-                raise TypeError("\"Union\" cannot be used as the type of dict elements.")
+                value_type = "|".join(value_type)
+                # raise TypeError("\"Union\" cannot be used as the type of dict elements.")
             return f"Dict[{key_type},{value_type}]"
         else:
             return "Dict"
@@ -168,7 +169,8 @@ def _parse_list(context: ParseContext) -> Optional[str]:
                 raise TypeError("Only ONE type can be used as the type of list elements.")
             elem_type = parse_type(list_args[0], context.schemas)
             if isinstance(elem_type, list):
-                raise TypeError("\"Union\" cannot be used as the type of list elements.")
+                elem_type = "|".join(elem_type)
+                # raise TypeError("\"Union\" cannot be used as the type of list elements.")
             return f"List[{elem_type}]"
         else:
             return "List"
