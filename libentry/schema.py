@@ -194,6 +194,11 @@ def _parse_base_model(context: ParseContext) -> Optional[str]:
         is_not_base_class = origin is not BaseModel
         if is_new_model and is_not_base_class:
             schema = Schema(name=model_name)
+            context.schemas[model_name] = schema
+            # Once the Schema object is created, it should be put into the context immediately.
+            # This is to prevent this object from being repeatedly parsed.
+            # Repeated parsing will cause dead recursion!
+
             fields = origin.model_fields
             assert isinstance(fields, Mapping)
             for name, field in fields.items():
@@ -216,7 +221,6 @@ def _parse_base_model(context: ParseContext) -> Optional[str]:
                     if is_dataclass(md):
                         schema_field.metadata.update(asdict(md))
                 schema.fields.append(schema_field)
-            context.schemas[model_name] = schema
 
         return model_name
     return None
