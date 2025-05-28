@@ -244,6 +244,9 @@ class MCPMixIn(JSONRPCMixIn, abc.ABC):
 
         return InitializeResult.model_validate(result)
 
+    def ping(self):
+        return self.call("ping")
+
     def list_tools(self) -> ListToolsResult:
         result = self.call("tools/list")
         return ListToolsResult.model_validate(result)
@@ -530,51 +533,83 @@ class APIClient(SubroutineMixIn, MCPMixIn):
 
 class SSESession(MCPMixIn):
 
-    def __init__(self, client: APIClient, sse_endpoint: str):
+    def __init__(self, client: APIClient, sse_endpoint: str, sse_timeout: int = 6):
         self.client = client
         self.sse_endpoint = sse_endpoint
-
-        self.sse_thread = Thread(target=self._sse_loop, daemon=True)
-        self.sse_thread.start()
+        self.sse_timeout = sse_timeout
 
         self.lock = Semaphore(0)
         self.endpoint = None
         self.pendings = {}
+        self.closed = False
+
+        self.ping_thread = Thread(target=self._ping_loop, daemon=False)
+        self.ping_thread.start()
+
+        self.sse_thread = Thread(target=self._sse_loop, daemon=False)
+        self.sse_thread.start()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+
+    def _ping_loop(self):
+        interval = max(self.sse_timeout / 2, 0.5)
+        while True:
+            with self.lock:
+                if self.closed:
+                    break
+            sleep(interval)
+            self.ping()
 
     def _sse_loop(self):
         request = HTTPRequest(
             path=self.sse_endpoint,
             options=HTTPOptions(
                 method="GET",
-                timeout=60
+                timeout=self.sse_timeout
             )
         )
         response = self.client.http_request(request)
         assert response.stream
         type_adapter = TypeAdapter(Union[JSONRPCRequest, JSONRPCResponse, JSONRPCNotification])
-        for sse in response.content:
-            assert isinstance(sse, SSE)
-            if sse.event == "endpoint":
-                self.endpoint = sse.data
-                self.lock.release()
-            elif sse.event == "message":
-                json_obj = json.loads(sse.data)
-                obj = type_adapter.validate_python(json_obj)
-                if isinstance(obj, JSONRPCRequest):
-                    self._on_request(obj)
-                elif isinstance(obj, JSONRPCNotification):
-                    self._on_notification(obj)
-                elif isinstance(obj, JSONRPCResponse):
-                    self._on_response(obj)
+        try:
+            for sse in response.content:
+                assert isinstance(sse, SSE)
+                if sse.event == "endpoint":
+                    self.endpoint = sse.data
+                    self.lock.release()
+                elif sse.event == "message":
+                    json_obj = json.loads(sse.data)
+                    obj = type_adapter.validate_python(json_obj)
+                    if isinstance(obj, JSONRPCRequest):
+                        self._on_request(obj)
+                    elif isinstance(obj, JSONRPCNotification):
+                        self._on_notification(obj)
+                    elif isinstance(obj, JSONRPCResponse):
+                        self._on_response(obj)
+                    else:
+                        pass
                 else:
-                    pass
-            else:
-                raise RuntimeError(f"Unknown event {sse.event}.")
+                    raise RuntimeError(f"Unknown event {sse.event}.")
+                with self.lock:
+                    if self.closed:
+                        break
+        except httpx.Timeout:
+            pass
 
     def _on_request(self, request: JSONRPCRequest):
+        print(request)
         pass
 
     def _on_notification(self, notification: JSONRPCNotification):
+        print(notification)
         pass
 
     def _on_response(self, response: JSONRPCResponse):
