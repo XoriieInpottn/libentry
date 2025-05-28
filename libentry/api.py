@@ -225,7 +225,7 @@ class BaseClient:
             verify: bool,
     ) -> Union[bytes, Iterable[bytes]]:
         headers = self.headers if headers is None else {**self.headers, **headers}
-        response = self.URLLIB3_POOL[int(verify)].http_request(
+        response = self.URLLIB3_POOL[int(verify)].request(
             method=method,
             url=url,
             body=body,
