@@ -233,18 +233,18 @@ class FlaskHandler:
 
         self.subroutine_adapter = SubroutineAdapter(fn, self.api_signature)
         self.jsonrpc_adapter = JSONRPCAdapter(fn, self.api_signature)
-        self.default_adapter = self.subroutine_adapter
 
+        adapter_mapping = {
+            api.TAG_ENDPOINT: self.fn,
+            "free": self.fn,
+            "schema_free": self.fn,
+            "schema-free": self.fn,
+            api.TAG_JSONRPC: self.jsonrpc_adapter,
+            "rpc": self.jsonrpc_adapter,
+            "mcp": self.jsonrpc_adapter,
+        }
         tag = self.api_info.tag if self.api_info else None
-        if tag is not None:
-            tag = tag.lower()
-            if tag in {"free", "schema_free", "schema-free"}:
-                self.default_adapter = self.fn
-            elif tag in {"jsonrpc", "rpc"}:
-                self.default_adapter = self.jsonrpc_adapter
-
-        # todo: debug info
-        print(f"{api_info.path}: {type(self.default_adapter)}\t{self.api_signature.input_model}")
+        self.default_adapter = adapter_mapping.get(tag, self.subroutine_adapter)
 
     def __call__(self):
         args = flask_request.args
@@ -369,7 +369,7 @@ class SSEService:
         self.sse_dict = {}
 
     # noinspection PyUnusedLocal
-    @api.get("/sse", tag="schema_free")
+    @api.get("/sse", tag=api.TAG_ENDPOINT)
     def sse(self, raw_request: Dict[str, Any]) -> Iterable[SSE]:
         session_id = str(uuid.uuid4())
         queue = Queue(8)
@@ -395,7 +395,7 @@ class SSEService:
 
         return _stream()
 
-    @api.route("/sse/message", tag="schema_free")
+    @api.route("/sse/message", tag=api.TAG_ENDPOINT)
     def sse_message(self, raw_request: Dict[str, Any]) -> None:
         ################################################################################
         # session validation
@@ -471,7 +471,7 @@ class JSONRPCService:
 
         self.type_adapter = TypeAdapter(Union[JSONRPCRequest, JSONRPCNotification])
 
-    @api.route(tag="schema_free")
+    @api.route(tag=api.TAG_ENDPOINT)
     def message(self, raw_request: Dict[str, Any]) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse], None]:
         request = self.type_adapter.validate_python(raw_request)
         path = f"/{request.method}"
@@ -521,7 +521,7 @@ class ToolsService:
             self._tool_routes = {}
             for route in self.service_routes.values():
                 api_info = route.api_info
-                if api_info.tag != "tool":
+                if api_info.tag != api.TAG_TOOL:
                     continue
                 self._tool_routes[api_info.name] = route
         return self._tool_routes
@@ -636,7 +636,7 @@ class ResourcesService:
             self._resource_routes = {}
             for route in self.service_routes.values():
                 api_info = route.api_info
-                if api_info.tag != "resource":
+                if api_info.tag != api.TAG_RESOURCE:
                     continue
                 uri = api_info.model_extra.get("uri", api_info.path)
                 self._resource_routes[uri] = route
@@ -771,10 +771,15 @@ class FlaskServer(Flask):
                 logger.error(f"Async function \"{fn.__name__}\" is not supported.")
                 continue
 
-            logger.info(f"Serving {path} as {', '.join(methods)}.")
-
             handler = FlaskHandler(fn, api_info, self)
             routes[path] = Route(api_info=api_info, fn=fn, handler=handler)
+
+            mode = api.TAG_ENDPOINT
+            if isinstance(handler.default_adapter, SubroutineAdapter):
+                mode = api.TAG_SUBROUTINE
+            elif isinstance(handler.default_adapter, JSONRPCAdapter):
+                mode = api.TAG_JSONRPC
+            logger.info(f"{mode.capitalize()}:\tmethod={'|'.join(methods)}\tpath={path}")
         return routes
 
     def ok(self, body: Union[str, Iterable[str], None], mimetype: str):

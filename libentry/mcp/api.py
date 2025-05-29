@@ -19,6 +19,12 @@ from pydantic import BaseModel, ConfigDict
 
 API_INFO_FIELD = "__api_info__"
 
+TAG_SUBROUTINE = "subroutine"
+TAG_JSONRPC = "jsonrpc"
+TAG_ENDPOINT = "endpoint"
+TAG_TOOL = "tool"
+TAG_RESOURCE = "resource"
+
 
 class APIInfo(BaseModel):
     path: str
@@ -69,7 +75,7 @@ def tool(path=None, name=None, description=None, **kwargs):
         methods=["POST"],
         name=name,
         description=description,
-        tag="tool",
+        tag=TAG_TOOL,
         **kwargs
     )
 
@@ -80,7 +86,7 @@ def resource(uri, name=None, description=None, mime_type=None, size=None, **kwar
         methods=["POST"],
         name=name,
         description=description,
-        tag="resource",
+        tag=TAG_RESOURCE,
         mimeType=mime_type,
         size=size,
         uri=uri,
