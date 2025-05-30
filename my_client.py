@@ -63,29 +63,29 @@ def main():
     ################################################################################
 
     print("Session initialize\n" + "=" * 80)
-    session = client.start_session()
-    resp = session.initialize()
-    print_response(resp)
+    with client.start_session() as session:
+        resp = session.initialize()
+        print_response(resp)
 
-    print("Session tools/list\n" + "=" * 80)
-    resp = session.list_tools().tools
-    print_response(resp)
+        print("Session tools/list\n" + "=" * 80)
+        resp = session.list_tools().tools
+        print_response(resp)
 
-    print("Session tools/call\n" + "=" * 80)
-    resp = session.call_tool("add", {"a": 1, "b": 2})
-    print_response(resp)
+        print("Session tools/call\n" + "=" * 80)
+        resp = session.call_tool("add", {"a": 1, "b": 2})
+        print_response(resp)
 
-    print("Session tools/call stream\n" + "=" * 80)
-    resp = session.call_tool("add_stream", {"a": 1, "b": 2})
-    print_response(resp)
+        print("Session tools/call stream\n" + "=" * 80)
+        resp = session.call_tool("add_stream", {"a": 1, "b": 2})
+        print_response(resp)
 
-    print("Session resources/list\n" + "=" * 80)
-    resp = session.list_resources().resources
-    print_response(resp)
+        print("Session resources/list\n" + "=" * 80)
+        resp = session.list_resources().resources
+        print_response(resp)
 
-    print("Session resources/read\n" + "=" * 80)
-    resp = session.read_resource("config://app")
-    print_response(resp)
+        print("Session resources/read\n" + "=" * 80)
+        resp = session.read_resource("config://app")
+        print_response(resp)
     return 0
 
 

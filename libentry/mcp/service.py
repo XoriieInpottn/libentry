@@ -57,10 +57,23 @@ class SubroutineAdapter:
 
     def __call__(
             self,
-            request: Dict[str, Any]
+            request: Any,
+            args: Optional[Dict[str, str]] = None
     ) -> Union[SubroutineResponse, Iterable[SubroutineResponse]]:
         if isinstance(request, BaseModel):
             request = request.model_dump()
+
+        if not isinstance(request, Dict):
+            raise ValueError(
+                f"Subroutine only accepts JSON object as input. "
+                f"Expect \"dict\", got \"{type(request)}\"."
+            )
+
+        if args is not None:
+            conflicts = args.keys() & request.keys()
+            if len(conflicts) > 0:
+                raise ValueError(f"Duplicated fields: \"{conflicts}\".")
+            request = {**args, **request}
 
         try:
             input_model = self.api_signature.input_model
@@ -117,16 +130,29 @@ class JSONRPCAdapter:
 
     def __call__(
             self,
-            request: Union[JSONRPCRequest, JSONRPCNotification, Dict[str, Any]]
+            request: Union[JSONRPCRequest, JSONRPCNotification, Dict[str, Any]],
+            args: Optional[Dict[str, str]] = None
     ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse], None]:
         if isinstance(request, Dict):
+            if args is not None:
+                conflicts = args.keys() & request.keys()
+                if len(conflicts) > 0:
+                    raise ValueError(f"Duplicated fields: \"{conflicts}\".")
+                request = {**args, **request}
             request = self.type_adapter.validate_python(request)
 
+        if isinstance(request, JSONRPCRequest):
+            fn = self._apply_request
+        elif isinstance(request, JSONRPCNotification):
+            fn = self._apply_notification
+        else:
+            raise ValueError(
+                f"JSONRPC only accepts JSONRPCRequest, JSONRPCNotification as input. "
+                f"Expect \"JSONRPCRequest\", \"JSONRPCNotification\" or \"dict\", got \"{type(request)}\"."
+            )
+
         try:
-            if isinstance(request, JSONRPCRequest):
-                return self._apply_request(request)
-            else:
-                return self._apply_notification(request)
+            return fn(request)
         except SystemExit as e:
             raise e
         except KeyboardInterrupt as e:
@@ -251,26 +277,20 @@ class FlaskHandler:
         data = flask_request.data
         content_type = flask_request.content_type
 
-        json_from_url = {**args}
+        args = {**args}
         if data:
             if (not content_type) or content_type == MIME.json.value:
-                json_from_data = json.loads(data)
+                raw_request = json.loads(data)
             else:
                 return self.app.error(f"Unsupported Content-Type: \"{content_type}\".")
         else:
-            json_from_data = {}
-
-        conflicts = json_from_url.keys() & json_from_data.keys()
-        if len(conflicts) > 0:
-            return self.app.error(f"Duplicated fields: \"{conflicts}\".")
-
-        input_json = {**json_from_url, **json_from_data}
+            raw_request = {}
 
         ################################################################################
         # Call method as MCP
         ################################################################################
         try:
-            mcp_response = self.default_adapter(input_json)
+            mcp_response = self.default_adapter(raw_request, args)
         except Exception as e:
             error = json.dumps(SubroutineError.from_exception(e))
             return self.app.error(error, mimetype=MIME.json.value)
@@ -370,7 +390,11 @@ class SSEService:
 
     # noinspection PyUnusedLocal
     @api.get("/sse", tag=api.TAG_ENDPOINT)
-    def sse(self, raw_request: Dict[str, Any]) -> Iterable[SSE]:
+    def sse(
+            self,
+            raw_request: Any,
+            args: Optional[Dict[str, str]] = None
+    ) -> Iterable[SSE]:
         session_id = str(uuid.uuid4())
         queue = Queue(8)
         with self.lock:
@@ -396,7 +420,23 @@ class SSEService:
         return _stream()
 
     @api.route("/sse/message", tag=api.TAG_ENDPOINT)
-    def sse_message(self, raw_request: Dict[str, Any]) -> None:
+    def sse_message(
+            self,
+            raw_request: Any,
+            args: Optional[Dict[str, str]] = None
+    ) -> None:
+        if not isinstance(raw_request, Dict):
+            raise ValueError(
+                f"/message only accepts JSON object as input. "
+                f"Expect \"dict\", got \"{type(raw_request)}\"."
+            )
+
+        if args is not None:
+            conflicts = args.keys() & raw_request.keys()
+            if len(conflicts) > 0:
+                raise ValueError(f"Duplicated fields: \"{conflicts}\".")
+            raw_request = {**args, **raw_request}
+
         ################################################################################
         # session validation
         ################################################################################
@@ -472,7 +512,26 @@ class JSONRPCService:
         self.type_adapter = TypeAdapter(Union[JSONRPCRequest, JSONRPCNotification])
 
     @api.route(tag=api.TAG_ENDPOINT)
-    def message(self, raw_request: Dict[str, Any]) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse], None]:
+    def message(
+            self,
+            raw_request: Any,
+            args: Optional[Dict[str, str]] = None
+    ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse], None]:
+        if isinstance(raw_request, List):
+            raise ValueError("Batching RCP requests is not supported yet.")
+
+        if not isinstance(raw_request, Dict):
+            raise ValueError(
+                f"/message only accepts JSON object as input. "
+                f"Expect \"dict\", got \"{type(raw_request)}\"."
+            )
+
+        if args is not None:
+            conflicts = args.keys() & raw_request.keys()
+            if len(conflicts) > 0:
+                raise ValueError(f"Duplicated fields: \"{conflicts}\".")
+            raw_request = {**args, **raw_request}
+
         request = self.type_adapter.validate_python(raw_request)
         path = f"/{request.method}"
         route = self.service_routes.get(path, self.builtin_routes.get(path))
@@ -501,6 +560,10 @@ class LifeCycleService:
             capabilities=ServerCapabilities(tools=ToolsCapability(listChanged=False)),
             serverInfo=Implementation(name="python-libentry", version="1.0.0")
         )
+
+    @api.route()
+    def ping(self):
+        return None
 
 
 class NotificationsService:
