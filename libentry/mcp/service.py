@@ -594,24 +594,26 @@ class ToolsService:
         tools = []
         for name, route in self.get_tool_routes().items():
             api_info = route.api_info
+            api_models = route.fn if isinstance(route.fn, APISignature) else get_api_signature(route.fn)
+            args_model = api_models.input_model or api_models.bundled_model
             tool = Tool(
                 name=api_info.name,
                 description=api_info.description,
-                inputSchema=ToolSchema()
+                inputSchema=ToolSchema.model_validate(args_model.model_json_schema())
             )
             tools.append(tool)
-            schema = query_api(route.fn)
-            input_schema = schema.context[schema.input_schema]
-            for field in input_schema.fields:
-                type_ = field.type
-                if isinstance(type_, List):
-                    type_ = "|".join(type_)
-                tool.inputSchema.properties[field.name] = ToolProperty(
-                    type=type_,
-                    description=field.description
-                )
-                if field.is_required:
-                    tool.inputSchema.required.append(field.name)
+            # schema = query_api(route.fn)
+            # input_schema = schema.context[schema.input_schema]
+            # for field in input_schema.fields:
+            #     type_ = field.type
+            #     if isinstance(type_, List):
+            #         type_ = "|".join(type_)
+            #     tool.inputSchema.properties[field.name] = ToolProperty(
+            #         type=type_,
+            #         description=field.description
+            #     )
+            #     if field.is_required:
+            #         tool.inputSchema.required.append(field.name)
         return ListToolsResult(tools=tools)
 
     @api.route("/tools/call")

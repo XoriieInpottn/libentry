@@ -312,6 +312,9 @@ class ToolAnnotations(BaseModel):
 
 class ToolProperty(BaseModel):
     type: Optional[str] = None
+    anyOf: Optional[List["ToolProperty"]] = None
+    items: Optional["ToolProperty"] = None
+    additionalProperties: Optional["ToolProperty"] = None
     description: Optional[str] = None
 
 

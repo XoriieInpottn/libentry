@@ -49,8 +49,8 @@ def custom_decode(d: dict):
     return d
 
 
-dump = partial(json.dump, default=custom_encode)
-dumps = partial(json.dumps, default=custom_encode)
+dump = partial(json.dump, default=custom_encode, ensure_ascii=False)
+dumps = partial(json.dumps, default=custom_encode, ensure_ascii=False)
 
 load = partial(json.load, object_hook=custom_decode)
 loads = partial(json.loads, object_hook=custom_decode)
