@@ -146,6 +146,8 @@ class ArgumentParser(argparse.ArgumentParser):
                         break
 
             default_value = info.default
+            if info.default_factory:
+                default_value = info.default_factory()
             if isinstance(instance, schema):
                 default_value = getattr(instance, name, None)
 
