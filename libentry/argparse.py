@@ -126,7 +126,7 @@ class ArgumentParser(argparse.ArgumentParser):
         self.schema_dict[name] = (schema, default)
         self._add_schema(name, schema)
 
-    def _add_schema(self, prefix: str, schema: Type[BaseModel]):
+    def _add_schema(self, prefix: str, schema: Type[BaseModel], instance: Optional[BaseModel] = None):
         model_fields = schema.model_fields
         assert isinstance(model_fields, dict)
         for name, info in model_fields.items():
@@ -145,13 +145,21 @@ class ArgumentParser(argparse.ArgumentParser):
                         nested = True
                         break
 
+            default_value = info.default
+            if isinstance(instance, schema):
+                default_value = getattr(instance, name, None)
+
             if nested:
-                self._add_schema(f"{prefix}.{name}", anno)
+                self._add_schema(
+                    f"{prefix}.{name}",
+                    schema=anno,
+                    instance=default_value
+                )
             else:
                 self.add_argument(
                     f"--{prefix}.{name}",
                     type=literal_eval,
-                    default=DefaultValue(info.default),
+                    default=DefaultValue(default_value),
                     # required=info.is_required(),
                     help=info.description
                 )
