@@ -8,19 +8,18 @@ from queue import Queue
 from threading import Semaphore, Thread
 from time import sleep
 from types import GeneratorType
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Type, Union
 from urllib.parse import urlencode, urljoin
 
 import httpx
 from pydantic import BaseModel, TypeAdapter
 
 from libentry import json
+from libentry.mcp.api import HasRequestPath
 from libentry.mcp.types import CallToolRequestParams, CallToolResult, ClientCapabilities, HTTPOptions, HTTPRequest, \
     HTTPResponse, Implementation, InitializeRequestParams, InitializeResult, JSONObject, JSONRPCError, \
-    JSONRPCNotification, \
-    JSONRPCRequest, \
-    JSONRPCResponse, JSONType, ListResourcesResult, ListToolsResult, MIME, ReadResourceRequestParams, \
-    ReadResourceResult, SSE, SubroutineError, SubroutineResponse
+    JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, JSONType, ListResourcesResult, ListToolsResult, MIME, \
+    ReadResourceRequestParams, ReadResourceResult, SSE, SubroutineError, SubroutineResponse
 
 
 class ServiceError(RuntimeError):
@@ -122,16 +121,16 @@ class SubroutineMixIn(abc.ABC):
     @abc.abstractmethod
     def subroutine_request(
             self,
-            path: str,
-            params: Dict[str, Any],
+            path: Union[str, Type[HasRequestPath], HasRequestPath],
+            params: Optional[Union[JSONObject, BaseModel]] = None,
             options: Optional[HTTPOptions] = None
     ) -> Union[SubroutineResponse, Iterable[SubroutineResponse]]:
         raise NotImplementedError()
 
     def request(
             self,
-            path: str,
-            params: Optional[JSONObject] = None,
+            path: Union[str, Type[HasRequestPath], HasRequestPath],
+            params: Optional[Union[JSONObject, BaseModel]] = None,
             options: Optional[HTTPOptions] = None
     ) -> Union[JSONType, Iterable[JSONType]]:
         response = self.subroutine_request(path, params, options)
@@ -153,7 +152,7 @@ class SubroutineMixIn(abc.ABC):
 
     def get(
             self,
-            path: str,
+            path: Union[str, Type[HasRequestPath], HasRequestPath],
             options: Optional[HTTPOptions] = None
     ) -> Union[JSONType, Iterable[JSONType]]:
         if options is None:
@@ -164,8 +163,8 @@ class SubroutineMixIn(abc.ABC):
 
     def post(
             self,
-            path: str,
-            params: Optional[JSONObject] = None,
+            path: Union[str, Type[HasRequestPath], HasRequestPath],
+            params: Optional[Union[JSONObject, BaseModel]] = None,
             options: Optional[HTTPOptions] = None
     ) -> Union[JSONType, Iterable[JSONType]]:
         if options is None:
@@ -462,12 +461,18 @@ class APIClient(SubroutineMixIn, MCPMixIn):
 
     def subroutine_request(
             self,
-            path: str,
-            params: Dict[str, Any],
+            path: Union[str, Type[HasRequestPath], HasRequestPath],
+            params: Optional[Union[JSONObject, BaseModel]] = None,
             options: Optional[HTTPOptions] = None
     ) -> Union[SubroutineResponse, Iterable[SubroutineResponse]]:
+        if isinstance(path, BaseModel):
+            if params is None:
+                params = path
         if isinstance(params, BaseModel):
             params = params.model_dump(exclude_none=True)
+
+        if hasattr(path, "get_request_path"):
+            path = path.get_request_path()
 
         json_request = HTTPRequest(
             path=path,
