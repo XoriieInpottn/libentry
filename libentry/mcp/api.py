@@ -15,7 +15,7 @@ __all__ = [
 
 import re
 from functools import partial
-from typing import Callable, List, Literal, Optional, Tuple, Type, Union
+from typing import Any, Callable, List, Literal, Optional, Tuple, Type, Union
 
 from pydantic import BaseModel, ConfigDict
 
@@ -29,16 +29,28 @@ TAG_RESOURCE = "resource"
 
 
 class HasRequestPath:
+    """The object has a request path.
+    A request path is a snake named string starts with "/".
+    """
+
+    __request_name__ = None
 
     @classmethod
     def get_request_path(cls) -> str:
-        name = cls.__name__
-        if name.endswith("Request"):
-            name = name[:-7]
-        return "/" + cls.camel_to_snake(name)
+        name = cls.__request_name__
+        if name:
+            if name.startswith("/"):
+                return name
+            else:
+                return "/" + name
+        else:
+            name = cls.__name__
+            if name.endswith("Request"):
+                name = name[:-7]
+            return "/" + cls._camel_to_snake(name)
 
     @staticmethod
-    def camel_to_snake(name: str) -> str:
+    def _camel_to_snake(name: str) -> str:
         s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
         s2 = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1)
         return s2.lower()
@@ -55,7 +67,7 @@ class APIInfo(BaseModel):
 
 
 def api(
-        path: Optional[Union[str, Type[HasRequestPath], HasRequestPath]] = None,
+        path: Optional[Union[str, Type[HasRequestPath], HasRequestPath, Any]] = None,
         methods: List[Literal["GET", "POST"]] = ("GET", "POST"),
         name: Optional[str] = None,
         description: Optional[str] = None,
@@ -75,6 +87,9 @@ def api(
                 _path = path
         else:
             _path = f"/{fn_name}"
+
+        if not isinstance(_path, str):
+            raise TypeError(f"\"path\" should be instance of str or HasRequestPath.")
 
         api_info = APIInfo(
             path=_path,

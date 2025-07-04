@@ -121,7 +121,7 @@ class SubroutineMixIn(abc.ABC):
     @abc.abstractmethod
     def subroutine_request(
             self,
-            path: Union[str, Type[HasRequestPath], HasRequestPath],
+            path: Union[str, Type[HasRequestPath], HasRequestPath, Any],
             params: Optional[Union[JSONObject, BaseModel]] = None,
             options: Optional[HTTPOptions] = None
     ) -> Union[SubroutineResponse, Iterable[SubroutineResponse]]:
@@ -129,7 +129,7 @@ class SubroutineMixIn(abc.ABC):
 
     def request(
             self,
-            path: Union[str, Type[HasRequestPath], HasRequestPath],
+            path: Union[str, Type[HasRequestPath], HasRequestPath, Any],
             params: Optional[Union[JSONObject, BaseModel]] = None,
             options: Optional[HTTPOptions] = None
     ) -> Union[JSONType, Iterable[JSONType]]:
@@ -152,7 +152,7 @@ class SubroutineMixIn(abc.ABC):
 
     def get(
             self,
-            path: Union[str, Type[HasRequestPath], HasRequestPath],
+            path: Union[str, Type[HasRequestPath], HasRequestPath, Any],
             options: Optional[HTTPOptions] = None
     ) -> Union[JSONType, Iterable[JSONType]]:
         if options is None:
@@ -163,7 +163,7 @@ class SubroutineMixIn(abc.ABC):
 
     def post(
             self,
-            path: Union[str, Type[HasRequestPath], HasRequestPath],
+            path: Union[str, Type[HasRequestPath], HasRequestPath, Any],
             params: Optional[Union[JSONObject, BaseModel]] = None,
             options: Optional[HTTPOptions] = None
     ) -> Union[JSONType, Iterable[JSONType]]:
@@ -461,7 +461,7 @@ class APIClient(SubroutineMixIn, MCPMixIn):
 
     def subroutine_request(
             self,
-            path: Union[str, Type[HasRequestPath], HasRequestPath],
+            path: Union[str, Type[HasRequestPath], HasRequestPath, Any],
             params: Optional[Union[JSONObject, BaseModel]] = None,
             options: Optional[HTTPOptions] = None
     ) -> Union[SubroutineResponse, Iterable[SubroutineResponse]]:
