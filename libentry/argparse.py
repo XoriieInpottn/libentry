@@ -14,9 +14,10 @@ __all__ = [
 
 import argparse
 import ast
+import json
 import re
 from dataclasses import fields, is_dataclass
-from typing import Optional, Sequence, Type, Union, get_args, get_origin
+from typing import Dict, List, Optional, Sequence, Type, Union, get_args, get_origin
 
 import yaml
 from pydantic import BaseModel
@@ -158,12 +159,29 @@ class ArgumentParser(argparse.ArgumentParser):
                     instance=default_value
                 )
             else:
+                desc = info.description + " " if info.description else ""
+                if info.is_required():
+                    desc += "(required)"
+                else:
+                    if default_value is None:
+                        desc += "(default=None)"
+                    elif isinstance(default_value, (str, int, float, bool)):
+                        desc += f"(default={default_value})"
+                    elif isinstance(default_value, (Dict, List)):
+                        try:
+                            desc += f"(default={json.dumps(default_value)})"
+                        except TypeError:
+                            default_type = type(default_value).__name__
+                            desc += f"(default={default_type} object)"
+                    else:
+                        default_type = type(default_value).__name__
+                        desc += f"(default={default_type} object)"
+
                 self.add_argument(
                     f"--{prefix}.{name}",
                     type=literal_eval,
                     default=DefaultValue(default_value),
-                    # required=info.is_required(),
-                    help=info.description
+                    help=desc
                 )
 
     def parse_args(self, args=None, namespace=None):
