@@ -10,10 +10,10 @@ from dataclasses import dataclass
 from queue import Empty, Queue
 from threading import Lock
 from types import GeneratorType
-from typing import Any, Callable, Dict, Generator, Iterable, List, Optional, Type, Union
+from typing import Any, Callable, Dict, Generator, Iterable, List, Literal, Optional, Type, Union
 
 from flask import Flask, request as flask_request
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter
 
 from libentry import json, logger
 from libentry.mcp import api
@@ -21,8 +21,8 @@ from libentry.mcp.api import APIInfo, list_api_info
 from libentry.mcp.types import BlobResourceContents, CallToolRequestParams, CallToolResult, Implementation, \
     InitializeRequestParams, InitializeResult, JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, \
     ListResourcesResult, ListToolsResult, MIME, ReadResourceRequestParams, ReadResourceResult, Resource, SSE, \
-    ServerCapabilities, SubroutineError, SubroutineResponse, TextContent, TextResourceContents, Tool, ToolProperty, \
-    ToolSchema, ToolsCapability
+    ServerCapabilities, SubroutineError, SubroutineResponse, TextContent, TextResourceContents, Tool, ToolSchema, \
+    ToolsCapability
 from libentry.schema import APISignature, get_api_signature, query_api
 
 try:
@@ -904,26 +904,116 @@ class GunicornApplication(BaseApplication):
         return FlaskServer(service)
 
 
+class RunServiceConfig(BaseModel):
+    """Run service config."""
+
+    host: str = Field(
+        title="Hostname",
+        description=(
+            "The hostname of the server that runs the service. "
+            "IP address or domain name."
+        ),
+        default="0.0.0.0"
+    )
+    port: int = Field(
+        title="Port number",
+        description="The port that the service listened to.",
+    )
+    num_workers: int = Field(
+        title="Number of workers",
+        description="The number of workers (processes) to run the service.",
+        default=1
+    )
+    num_threads: int = Field(
+        title="Number of threads",
+        description="The number of threads for each worker.",
+        default=20
+    )
+    num_connections: Optional[int] = Field(
+        title="Max number of connections",
+        description="The maximum number of simultaneous clients (or socket connections).",
+        default=1024
+    )
+    backlog: Optional[int] = Field(
+        title="The maximum number of pending connections",
+        description="The maximum number of pending connections.",
+        default=2048
+    )
+    worker_class: Literal["sync", "gthread", "eventlet", "gevent", "tornado"] = Field(
+        title="The type of workers to use",
+        description="The type of workers to use.",
+        default="gthread"
+    )
+    timeout: int = Field(
+        title="Worker timeout",
+        description="Workers silent for more than this many seconds are killed and restarted.",
+        default=60
+    )
+    keyfile: Optional[str] = Field(
+        title="SSL key file",
+        description="SSL key file.",
+        default=None
+    )
+    keyfile_password: Optional[str] = Field(
+        title="SSL key file password",
+        description="SSL key file password.",
+        default=None
+    )
+    certfile: Optional[str] = Field(
+        title="SSL certificate file",
+        description="SSL certificate file.",
+        default=None
+    )
+
+
 def run_service(
         service_type: Union[Type, Callable],
         service_config=None,
-        host: str = "0.0.0.0",
-        port: int = 8888,
-        num_workers: int = 1,
-        num_threads: int = 20,
-        num_connections: Optional[int] = 1000,
-        backlog: Optional[int] = 1000,
-        worker_class: str = "gthread",
-        timeout: int = 60,
+        run_config: Optional[RunServiceConfig] = None,
+        *,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        num_workers: Optional[int] = None,
+        num_threads: Optional[int] = None,
+        num_connections: Optional[int] = None,
+        backlog: Optional[int] = None,
+        worker_class: Optional[str] = None,
+        timeout: Optional[int] = None,
         keyfile: Optional[str] = None,
         keyfile_password: Optional[str] = None,
         certfile: Optional[str] = None
-):
+) -> None:
+    kwargs = {}
+    if host is not None:
+        kwargs["host"] = host
+    if port is not None:
+        kwargs["port"] = port
+    if num_workers is not None:
+        kwargs["num_workers"] = num_workers
+    if num_threads is not None:
+        kwargs["num_threads"] = num_threads
+    if num_connections is not None:
+        kwargs["num_connections"] = num_connections
+    if backlog is not None:
+        kwargs["backlog"] = backlog
+    if worker_class is not None:
+        kwargs["worker_class"] = worker_class
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    if keyfile is not None:
+        kwargs["keyfile"] = keyfile
+    if keyfile_password is not None:
+        kwargs["keyfile_password"] = keyfile_password
+    if certfile is not None:
+        kwargs["certfile"] = certfile
+
+    if run_config is None:
+        run_config = RunServiceConfig(**kwargs)
+    else:
+        for name, value in kwargs.items():
+            setattr(run_config, name, value)
+
     logger.info("Starting gunicorn server.")
-    if num_connections is None or num_connections < num_threads * 2:
-        num_connections = num_threads * 2
-    if backlog is None or backlog < num_threads * 2:
-        backlog = num_threads * 2
 
     def ssl_context(config, _default_ssl_context_factory):
         import ssl
@@ -931,21 +1021,21 @@ def run_service(
         context.load_cert_chain(
             certfile=config.certfile,
             keyfile=config.keyfile,
-            password=keyfile_password
+            password=run_config.keyfile_password
         )
         context.minimum_version = ssl.TLSVersion.TLSv1_3
         return context
 
     options = {
-        "bind": f"{host}:{port}",
-        "workers": num_workers,
-        "threads": num_threads,
-        "timeout": timeout,
-        "worker_connections": num_connections,
-        "backlog": backlog,
-        "keyfile": keyfile,
-        "certfile": certfile,
-        "worker_class": worker_class,
+        "bind": f"{run_config.host}:{run_config.port}",
+        "workers": run_config.num_workers,
+        "threads": run_config.num_threads,
+        "timeout": run_config.timeout,
+        "worker_connections": run_config.num_connections,
+        "backlog": run_config.backlog,
+        "keyfile": run_config.keyfile,
+        "certfile": run_config.certfile,
+        "worker_class": run_config.worker_class,
         "ssl_context": ssl_context
     }
     for name, value in options.items():

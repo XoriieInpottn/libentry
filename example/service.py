@@ -10,7 +10,8 @@ from time import sleep
 from typing import Iterable, Union
 
 from example.common import ExampleRequest, ExampleResponse, ExampleServiceConfig
-from libentry import api, logger
+from libentry import logger
+from libentry.mcp import api
 
 
 class ExampleService:
