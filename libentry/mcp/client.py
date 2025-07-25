@@ -9,7 +9,7 @@ from threading import Semaphore, Thread
 from time import sleep
 from types import GeneratorType
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Type, Union
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urlencode
 
 import httpx
 from pydantic import BaseModel, TypeAdapter
@@ -371,7 +371,7 @@ class APIClient(SubroutineMixIn, MCPMixIn):
         raise err
 
     def _http_request(self, request: HTTPRequest, timeout: float) -> HTTPResponse:
-        full_url = urljoin(self.base_url, request.path)
+        full_url = self.base_url.rstrip("/") + "/" + request.path.lstrip("/")
         headers = (
             {**self.headers}
             if request.options.headers is None else

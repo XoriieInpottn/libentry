@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from queue import Empty, Queue
 from threading import Lock
 from types import GeneratorType
-from typing import Any, Callable, Dict, Generator, Iterable, List, Literal, Optional, Type, Union
+from typing import Any, Callable, Dict, Generator, Iterable, List, Literal, Optional, Tuple, Type, Union
 
 from flask import Flask, request as flask_request
 from pydantic import BaseModel, Field, TypeAdapter
@@ -805,9 +805,11 @@ class FlaskServer(Flask):
         logger.info("Initializing Flask application.")
         existing_routes = {}
 
-        routes = self._create_routes(self.service)
-        self.service_routes.update(routes)
-        existing_routes.update(self.service_routes)
+        input_services = self.service if isinstance(self.service, (List, Tuple)) else [self.service]
+        for input_service in input_services:
+            routes = self._create_routes(input_service)
+            self.service_routes.update(routes)
+            existing_routes.update(self.service_routes)
 
         for builtin_service in self.builtin_services:
             routes = self._create_routes(builtin_service, existing_routes)
