@@ -11,7 +11,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-from libentry.api import APIClient
+from libentry.mcp.client import APIClient
+from libentry.mcp.types import HTTPOptions
 
 
 class TestRequest(BaseModel):
@@ -49,14 +50,13 @@ def test(request: TestRequest):
                 if request.method == "GET":
                     response = APIClient().get(
                         request.url,
-                        **kwargs
+                        HTTPOptions(**kwargs)
                     )
                 else:
                     response = APIClient().post(
                         request.url,
                         request.data,
-                        stream=request.stream,
-                        **kwargs
+                        HTTPOptions(stream=request.stream, **kwargs)
                     )
                 if not request.stream:
                     t = time() - t
