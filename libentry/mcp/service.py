@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from queue import Empty, Queue
 from threading import Lock
 from types import GeneratorType
-from typing import Any, Callable, Dict, Generator, Iterable, List, Literal, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, Generator, Iterable, List, Literal, Optional, Tuple, Union
 
 from flask import Flask, request as flask_request
 from pydantic import BaseModel, Field, TypeAdapter
@@ -891,19 +891,41 @@ class GunicornApplication(BaseApplication):
 
     def load(self):
         logger.info("Initializing the service.")
-        if isinstance(self.service_type, type) or callable(self.service_type):
-            service = self.service_type(self.service_config) if self.service_config else self.service_type()
-        elif self.service_config is None:
+        if isinstance(self.service_type, (List, Tuple)):
+            if isinstance(self.service_config, (List, Tuple)) and len(self.service_config) == len(self.service_type):
+                service = [
+                    self._create_service(t, c)
+                    for t, c in zip(self.service_type, self.service_config)
+                ]
+            elif self.service_config is None:
+                service = [
+                    self._create_service(t, self.service_config)
+                    for t in self.service_type
+                ]
+            else:
+                raise RuntimeError(
+                    f"You are going to run {len(self.service_type)} services. "
+                    "In the multiple service mode, every `service_type` requires a `service_config` object."
+                )
+        else:
+            service = self._create_service(self.service_type, self.service_config)
+        logger.info("Service initialized.")
+
+        return FlaskServer(service)
+
+    @staticmethod
+    def _create_service(service_type, service_config):
+        if isinstance(service_type, type) or callable(service_type):
+            service = service_type(service_config) if service_config else service_type()
+        elif service_config is None:
             logger.warning(
                 "Be careful! It is not recommended to start the server from a service instance. "
                 "Use service_type and service_config instead."
             )
-            service = self.service_type
+            service = service_type
         else:
-            raise TypeError(f"Invalid service type \"{type(self.service_type)}\".")
-        logger.info("Service initialized.")
-
-        return FlaskServer(service)
+            raise TypeError(f"Invalid service type \"{type(service_type)}\".")
+        return service
 
 
 class RunServiceConfig(BaseModel):
@@ -969,7 +991,7 @@ class RunServiceConfig(BaseModel):
 
 
 def run_service(
-        service_type: Union[Type, Callable],
+        service_type: Union[Union[type, Callable], List, Tuple],
         service_config=None,
         run_config: Optional[RunServiceConfig] = None,
         *,
