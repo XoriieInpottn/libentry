@@ -143,12 +143,21 @@ class SubroutineMixIn(abc.ABC):
             return self._iter_results_from_subroutine(response)
 
     @staticmethod
-    def _iter_results_from_subroutine(responses: Iterable[SubroutineResponse]) -> Iterable[JSONType]:
-        for response in responses:
-            if response.error is None:
-                yield response.result
+    def _iter_results_from_subroutine(response: Iterable[SubroutineResponse]) -> Iterable[JSONType]:
+        it = iter(response)
+        try:
+            while True:
+                chunk = next(it)
+                if chunk.error is None:
+                    yield chunk.result
+                else:
+                    raise ServiceError.from_subroutine_error(chunk.error)
+        except StopIteration as e:
+            chunk = e.value
+            if chunk.error is None:
+                return chunk.result
             else:
-                raise ServiceError.from_subroutine_error(response.error)
+                raise ServiceError.from_subroutine_error(chunk.error)
 
     def get(
             self,
@@ -218,12 +227,22 @@ class JSONRPCMixIn(abc.ABC):
             return self._iter_results_from_jsonrpc(response)
 
     @staticmethod
-    def _iter_results_from_jsonrpc(responses: Iterable[JSONRPCResponse]) -> Iterable[JSONType]:
-        for response in responses:
-            if response.error is None:
-                yield response.result
+    def _iter_results_from_jsonrpc(response: Iterable[JSONRPCResponse]) -> Iterable[JSONType]:
+        it = iter(response)
+        try:
+            while True:
+                chunk = next(it)
+                if chunk.error is None:
+                    yield chunk.result
+                else:
+                    raise ServiceError.from_jsonrpc_error(chunk.error)
+        except StopIteration as e:
+            chunk = e.value
+            if chunk.error is None:
+                return chunk.result
             else:
-                raise ServiceError.from_jsonrpc_error(response.error)
+                raise ServiceError.from_jsonrpc_error(chunk.error)
+
 
 
 class MCPMixIn(JSONRPCMixIn, abc.ABC):
@@ -487,14 +506,16 @@ class APIClient(SubroutineMixIn, MCPMixIn):
 
     @staticmethod
     def _iter_subroutine_responses(response: HTTPResponse) -> Iterable[SubroutineResponse]:
+        return_response = None
         for sse in response.content:
             assert isinstance(sse, SSE)
-            if sse.event != "message":
-                continue
-            if not sse.data:
-                continue
-            json_obj = json.loads(sse.data)
-            yield SubroutineResponse.model_validate(json_obj)
+            if sse.event == "message" and sse.data:
+                json_obj = json.loads(sse.data)
+                yield SubroutineResponse.model_validate(json_obj)
+            elif sse.event == "return" and sse.data:
+                json_obj = json.loads(sse.data)
+                return_response = SubroutineResponse.model_validate(json_obj)
+        return return_response
 
     def jsonrpc_request(
             self,
@@ -515,14 +536,16 @@ class APIClient(SubroutineMixIn, MCPMixIn):
 
     @staticmethod
     def _iter_jsonrpc_responses(response: HTTPResponse) -> Iterable[JSONRPCResponse]:
+        return_response = None
         for sse in response.content:
             assert isinstance(sse, SSE)
-            if sse.event != "message":
-                continue
-            if not sse.data:
-                continue
-            json_obj = json.loads(sse.data)
-            yield JSONRPCResponse.model_validate(json_obj)
+            if sse.event == "message" and sse.data:
+                json_obj = json.loads(sse.data)
+                yield JSONRPCResponse.model_validate(json_obj)
+            elif sse.event == "return" and sse.data:
+                json_obj = json.loads(sse.data)
+                return_response = JSONRPCResponse.model_validate(json_obj)
+        return return_response
 
     def jsonrpc_notify(
             self,

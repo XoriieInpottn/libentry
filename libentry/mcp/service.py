@@ -98,24 +98,21 @@ class SubroutineAdapter:
     @staticmethod
     def _iter_response(
             results: Iterable[Any]
-    ) -> Generator[SubroutineResponse, None, Optional[SubroutineResponse]]:
+    ) -> Iterable[SubroutineResponse]:
         it = iter(results)
-        while True:
-            try:
+        try:
+            while True:
                 result = next(it)
                 if not isinstance(result, SubroutineResponse):
                     result = SubroutineResponse(result=result)
                 yield result
-            except StopIteration as e:
-                final_result = e.value
-                if not isinstance(final_result, SubroutineResponse):
-                    final_result = SubroutineResponse(result=final_result)
-                break
-            except Exception as e:
-                final_result = SubroutineResponse(error=SubroutineError.from_exception(e))
-                yield final_result
-                break
-        return final_result
+        except StopIteration as e:
+            result = e.value
+            if not isinstance(result, SubroutineResponse):
+                result = SubroutineResponse(result=result)
+            return result
+        except Exception as e:
+            yield SubroutineResponse(error=SubroutineError.from_exception(e))
 
 
 class JSONRPCAdapter:
@@ -339,15 +336,36 @@ class FlaskHandler:
             )
 
     def _iter_sse_stream(self, events: Iterable[Union[SSE, Dict[str, Any]]]) -> Iterable[str]:
-        for item in events:
-            if isinstance(item, SSE):
-                event = item.event
-                data = item.data
-            else:
-                event = "message"
-                data = item
+        it = iter(events)
+        try:
+            while True:
+                item = next(it)
+                if isinstance(item, SSE):
+                    event = item.event
+                    data = item.data
+                else:
+                    event = "message"
+                    data = item
+                yield "event:"
+                yield event
+                if data is not None:
+                    yield "\n"
+                    yield "data:"
+                    if isinstance(data, BaseModel):
+                        # BaseModel
+                        yield json.dumps(data.model_dump(exclude_none=True))
+                    elif isinstance(data, (Dict, List)):
+                        # JSON Object and Array
+                        yield json.dumps(data)
+                    else:
+                        # Plain text
+                        yield str(data)
+                yield "\n\n"
+        except StopIteration as e:
+            item = e.value
+            data = item.data if isinstance(item, SSE) else item
             yield "event:"
-            yield event
+            yield "return"
             if data is not None:
                 yield "\n"
                 yield "data:"

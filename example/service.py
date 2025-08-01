@@ -19,7 +19,7 @@ class ExampleService:
     def __init__(self, config: ExampleServiceConfig):
         self.config = config
 
-    @api.post()
+    @api.tool()
     def foo(self, request: ExampleRequest) -> ExampleResponse:
         logger.info(f"{request.request_id}: step A")
         sleep(random.uniform(1, 1.1))
@@ -33,7 +33,7 @@ class ExampleService:
         logger.info(f"{request.request_id}: finished")
         return ExampleResponse(output_content=f"{self.config.name} finished")
 
-    @api.post()
+    @api.tool()
     def foo_stream(self, request: ExampleRequest) -> Union[ExampleResponse, Iterable[ExampleResponse]]:
         if request.stream:
             def gen():
