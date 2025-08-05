@@ -512,7 +512,6 @@ class APIClient(SubroutineMixIn, MCPMixIn):
     def _iter_subroutine_responses(response: HTTPResponse) -> Iterable[SubroutineResponse]:
         return_response = None
         for sse in response.content:
-            print(sse)
             assert isinstance(sse, SSE)
             if sse.event == "message" and sse.data:
                 json_obj = json.loads(sse.data)
