@@ -154,7 +154,9 @@ class SubroutineMixIn(abc.ABC):
                     raise ServiceError.from_subroutine_error(chunk.error)
         except StopIteration as e:
             chunk = e.value
-            if chunk.error is None:
+            if chunk is None:
+                return None
+            elif chunk.error is None:
                 return chunk.result
             else:
                 raise ServiceError.from_subroutine_error(chunk.error)
@@ -238,7 +240,9 @@ class JSONRPCMixIn(abc.ABC):
                     raise ServiceError.from_jsonrpc_error(chunk.error)
         except StopIteration as e:
             chunk = e.value
-            if chunk.error is None:
+            if chunk is None:
+                return None
+            elif chunk.error is None:
                 return chunk.result
             else:
                 raise ServiceError.from_jsonrpc_error(chunk.error)
@@ -508,6 +512,7 @@ class APIClient(SubroutineMixIn, MCPMixIn):
     def _iter_subroutine_responses(response: HTTPResponse) -> Iterable[SubroutineResponse]:
         return_response = None
         for sse in response.content:
+            print(sse)
             assert isinstance(sse, SSE)
             if sse.event == "message" and sse.data:
                 json_obj = json.loads(sse.data)
