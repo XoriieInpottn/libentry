@@ -8,7 +8,7 @@ from queue import Queue
 from threading import Semaphore, Thread
 from time import sleep
 from types import GeneratorType
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, Generator, Iterable, List, Optional, Tuple, Type, Union
 from urllib.parse import urlencode
 
 import httpx
@@ -248,7 +248,6 @@ class JSONRPCMixIn(abc.ABC):
                 raise ServiceError.from_jsonrpc_error(chunk.error)
 
 
-
 class MCPMixIn(JSONRPCMixIn, abc.ABC):
 
     def initialize(self) -> InitializeResult:
@@ -282,10 +281,18 @@ class MCPMixIn(JSONRPCMixIn, abc.ABC):
         if not isinstance(result, GeneratorType):
             return CallToolResult.model_validate(result)
         else:
-            return (
-                CallToolResult.model_validate(item)
-                for item in result
-            )
+            def gen() -> Generator[CallToolResult, None, Optional[CallToolResult]]:
+                it = iter(result)
+                try:
+                    while True:
+                        item = next(it)
+                        yield CallToolResult.model_validate(item)
+                except StopIteration as e:
+                    item = e.value
+                    if item is not None:
+                        return CallToolResult.model_validate(item)
+
+            return gen()
 
     def list_resources(self) -> ListResourcesResult:
         result = self.call("resources/list")
@@ -297,10 +304,18 @@ class MCPMixIn(JSONRPCMixIn, abc.ABC):
         if not isinstance(result, GeneratorType):
             return ReadResourceResult.model_validate(result)
         else:
-            return (
-                ReadResourceResult.model_validate(item)
-                for item in result
-            )
+            def gen() -> Generator[ReadResourceResult, None, Optional[ReadResourceResult]]:
+                it = iter(result)
+                try:
+                    while True:
+                        item = next(it)
+                        yield ReadResourceResult.model_validate(item)
+                except StopIteration as e:
+                    item = e.value
+                    if item is not None:
+                        return ReadResourceResult.model_validate(item)
+
+            return gen()
 
 
 class APIClient(SubroutineMixIn, MCPMixIn):

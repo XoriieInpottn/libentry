@@ -4,7 +4,6 @@ __author__ = "xi"
 
 import asyncio
 import base64
-import io
 import uuid
 from dataclasses import dataclass
 from queue import Empty, Queue
@@ -98,7 +97,7 @@ class SubroutineAdapter:
     @staticmethod
     def _iter_response(
             results: Iterable[Any]
-    ) -> Iterable[SubroutineResponse]:
+    ) -> Generator[SubroutineResponse, None, Optional[SubroutineResponse]]:
         it = iter(results)
         try:
             while True:
@@ -113,6 +112,7 @@ class SubroutineAdapter:
             return result
         except Exception as e:
             yield SubroutineResponse(error=SubroutineError.from_exception(e))
+        return None
 
 
 class JSONRPCAdapter:
@@ -669,18 +669,17 @@ class ToolsService:
     @staticmethod
     def _iter_tool_results(
             responses: Iterable[SubroutineResponse]
-    ) -> Generator[CallToolResult, None, CallToolResult]:
-        final_text = io.StringIO()
-        error = None
+    ) -> Generator[CallToolResult, None, Optional[CallToolResult]]:
         try:
-            for response in responses:
+            it = iter(responses)
+            while True:
+                response = next(it)
                 if response.error is not None:
                     text = json.dumps(response.error)
-                    error = CallToolResult(
+                    yield CallToolResult(
                         content=[TextContent(text=text)],
                         isError=True
                     )
-                    yield error
                     break
                 else:
                     result = response.result
@@ -689,7 +688,22 @@ class ToolsService:
                         content=[TextContent(text=text)],
                         isError=False
                     )
-                    final_text.write(text)
+        except StopIteration as e:
+            response = e.value
+            if response is not None:
+                if response.error is not None:
+                    text = json.dumps(response.error)
+                    return CallToolResult(
+                        content=[TextContent(text=text)],
+                        isError=True
+                    )
+                else:
+                    result = response.result
+                    text = json.dumps(result) if isinstance(result, (Dict, BaseModel)) else str(result)
+                    return CallToolResult(
+                        content=[TextContent(text=text)],
+                        isError=False
+                    )
         except Exception as e:
             text = json.dumps(SubroutineError.from_exception(e))
             error = CallToolResult(
@@ -697,14 +711,7 @@ class ToolsService:
                 isError=True
             )
             yield error
-
-        if error is None:
-            return CallToolResult(
-                content=[TextContent(text=final_text.getvalue())],
-                isError=False
-            )
-        else:
-            return error
+        return None
 
 
 class ResourcesService:
@@ -778,6 +785,7 @@ class ResourcesService:
             uri: str,
             mime_type: Optional[str] = None
     ) -> Generator[ReadResourceResult, None, Optional[ReadResourceResult]]:
+        # todo: returned content need to be processed
         for content in contents:
             if isinstance(content, str):
                 yield ReadResourceResult(contents=[TextResourceContents(
