@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Sequence, Type, Union, get_args, get_or
 
 import yaml
 from pydantic import BaseModel
+from pydantic_core import PydanticUndefined
 
 
 def literal_eval(exp):
@@ -213,6 +214,10 @@ class ArgumentParser(argparse.ArgumentParser):
             else:
                 if not isinstance(value, DefaultValue):
                     merged_flat_dict[name] = value
+        merged_flat_dict = {
+            k: v for k, v in merged_flat_dict.items()
+            if v is not None and v is not PydanticUndefined
+        }
 
         merged_json = {}
         self._json_unflatten(merged_flat_dict, merged_json)
