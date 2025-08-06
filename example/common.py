@@ -7,6 +7,9 @@ __all__ = [
     "ExampleResponse",
 ]
 
+import os
+
+from agent_types.common import Request, Response
 from pydantic import BaseModel, Field
 
 
@@ -15,11 +18,12 @@ class ExampleServiceConfig(BaseModel):
     other_configs: dict = Field(default_factory=dict)
 
 
+class ExampleRequest(Request):
+    __request_name__ = "foo_stream"
 
-class ExampleRequest(BaseModel):
-    request_id: str = Field(min_length=10, max_length=1024)
+    path: str = Field(default=os.path.abspath(__file__))
     stream: bool = Field(True)
 
 
-class ExampleResponse(BaseModel):
+class ExampleResponse(Response):
     output_content: str = Field()

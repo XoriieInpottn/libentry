@@ -2,14 +2,47 @@
 
 __author__ = "xi"
 
-from libentry.api import APIClient
+from types import GeneratorType
+
+from example.common import ExampleRequest, ExampleResponse
+from libentry.mcp.client import APIClient
 
 
 def main():
-    request = {"request_id": "test_request"}
-    response = APIClient().post("http://localhost:3333/foo_stream", request, stream=True)
-    for chunk in response:
-        print(chunk)
+    client = APIClient("http://localhost:8888")
+
+    request = ExampleRequest(stream=True)
+
+    response = client.post(request)
+    assert isinstance(response, GeneratorType)
+    it = iter(response)
+    try:
+        while True:
+            chunk = next(it)
+            chunk = ExampleResponse.model_validate(chunk)
+            print(chunk.output_content, end="", flush=True)
+    except StopIteration as e:
+        print()
+        if e.value is not None:
+            print("完整输出：")
+            chunk = ExampleResponse.model_validate(e.value)
+            print(chunk)
+
+    response = client.call_tool("foo_stream", request.model_dump())
+    assert isinstance(response, GeneratorType)
+    it = iter(response)
+    try:
+        while True:
+            chunk = next(it)
+            chunk = ExampleResponse.model_validate_json(chunk.content[0].text)
+            print(chunk.output_content, end="", flush=True)
+    except StopIteration as e:
+        print()
+        if e.value is not None:
+            print("完整输出：")
+            chunk = ExampleResponse.model_validate_json(e.value.content[0].text)
+            print(chunk)
+
     return 0
 
 

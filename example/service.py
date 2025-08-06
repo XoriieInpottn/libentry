@@ -6,7 +6,7 @@ __all__ = [
 ]
 
 import random
-from time import sleep
+import time
 from typing import Iterable, Union
 
 from example.common import ExampleRequest, ExampleResponse, ExampleServiceConfig
@@ -19,42 +19,32 @@ class ExampleService:
     def __init__(self, config: ExampleServiceConfig):
         self.config = config
 
-    @api.tool()
-    def foo(self, request: ExampleRequest) -> ExampleResponse:
-        logger.info(f"{request.request_id}: step A")
-        sleep(random.uniform(1, 1.1))
-
-        logger.info(f"{request.request_id}: step B")
-        sleep(random.uniform(1, 1.2))
-
-        logger.info(f"{request.request_id}: step C")
-        sleep(random.uniform(1, 1.1))
-
-        logger.info(f"{request.request_id}: finished")
-        return ExampleResponse(output_content=f"{self.config.name} finished")
-
-    @api.tool()
+    @api.tool(path=ExampleRequest.get_request_path())
     def foo_stream(self, request: ExampleRequest) -> Union[ExampleResponse, Iterable[ExampleResponse]]:
         if request.stream:
             def gen():
                 try:
-                    logger.info(f"{request.request_id}: step A")
-                    yield ExampleResponse(output_content=f"step A")
-                    sleep(random.uniform(1, 1.1))
+                    logger.info(f"{request.trace_id}: Start {request.path}")
+                    yield ExampleResponse(output_content=f"Start {request.path}\n")
 
-                    logger.info(f"{request.request_id}: step B")
-                    yield ExampleResponse(output_content=f"step B")
-                    sleep(random.uniform(1, 1.2))
+                    full = []
+                    with open(request.path, "r") as f:
+                        while True:
+                            time.sleep(random.uniform(0.01, 0.05))
+                            chunk = f.read(random.randint(4, 6))
+                            if not chunk:
+                                break
+                            yield ExampleResponse(output_content=chunk)
+                            full.append(chunk)
 
-                    logger.info(f"{request.request_id}: step C")
-                    yield ExampleResponse(output_content=f"step C")
-                    sleep(random.uniform(1, 1.1))
+                    logger.info(f"{request.trace_id}: End {request.path}")
+                    yield ExampleResponse(output_content=f"End {request.path}\n")
 
-                    logger.info(f"{request.request_id}: finished")
-                    return ExampleResponse(output_content=f"{self.config.name} finished(stream)")
+                    return ExampleResponse(output_content="".join(full))
                 finally:
-                    logger.info(f"{request.request_id}: stream released")
+                    logger.info(f"{request.trace_id}: stream released")
 
             return gen()
         else:
-            return ExampleResponse(output_content=f"{self.config.name} finished(no_stream)")
+            with open(request.path, "r") as f:
+                return ExampleResponse(output_content=f.read())
