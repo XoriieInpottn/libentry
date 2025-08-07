@@ -232,8 +232,8 @@ def _parse_base_model(context: ParseContext) -> Optional[str]:
 def _parse_iterable(context: ParseContext) -> Optional[str]:
     if context.origin.__name__ in {"Iterable", "Generator", "range"} and issubclass(context.origin, Iterable):
         iter_args = get_args(context.annotation)
-        if len(iter_args) != 1:
-            raise TypeError("Only ONE type can be used as the type of iterable elements.")
+        if len(iter_args) < 1:
+            raise TypeError("At least ONE type should be specified for iterable elements.")
         iter_type = parse_type(iter_args[0], context.schemas)
         if isinstance(iter_type, list):
             raise TypeError("\"Union\" cannot be used as the type of iterable elements.")
