@@ -28,7 +28,7 @@ def main():
             chunk = ExampleResponse.model_validate(e.value)
             print(chunk)
 
-    response = client.call_tool("foo_stream", request.model_dump())
+    response = client.call_tool("give_example", request.model_dump())
     assert isinstance(response, GeneratorType)
     it = iter(response)
     try:

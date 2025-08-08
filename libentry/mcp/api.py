@@ -94,7 +94,7 @@ def api(
         api_info = APIInfo(
             path=_path,
             methods=methods,
-            name=name or fn_name,
+            name=name or _path.lstrip("/"),
             description=description or fn_doc,
             tag=tag
         )

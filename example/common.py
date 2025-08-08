@@ -19,7 +19,7 @@ class ExampleServiceConfig(BaseModel):
 
 
 class ExampleRequest(Request):
-    __request_name__ = "foo_stream"
+    __request_name__ = "give_example"
 
     path: str = Field(default=os.path.abspath(__file__))
     stream: bool = Field(True)
