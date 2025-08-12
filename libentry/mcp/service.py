@@ -812,8 +812,11 @@ class Route:
 
 class FlaskServer(Flask):
 
-    def __init__(self, service):
+    def __init__(self, service, options: Dict[str, Any]):
         super().__init__(__name__)
+        self.options = options
+        self.access_control_allow_origin = self.options.get("access_control_allow_origin")
+        self.access_control_allow_methods = self.options.get("access_control_allow_methods")
 
         self.service_routes = {}
         self.builtin_routes = {}
@@ -876,10 +879,20 @@ class FlaskServer(Flask):
         return routes
 
     def ok(self, body: Union[str, Iterable[str], None], mimetype: str):
-        return self.response_class(body, status=200, mimetype=mimetype)
+        response = self.response_class(body, status=200, mimetype=mimetype)
+        if self.access_control_allow_origin:
+            response.headers["Access-Control-Allow-Origin"] = "*"
+        if self.access_control_allow_methods:
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST"
+        return response
 
     def error(self, body: str, mimetype=MIME.plain.value):
-        return self.response_class(body, status=500, mimetype=mimetype)
+        response = self.response_class(body, status=500, mimetype=mimetype)
+        if self.access_control_allow_origin:
+            response.headers["Access-Control-Allow-Origin"] = "*"
+        if self.access_control_allow_methods:
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST"
+        return response
 
     @api.get("/")
     def index(self, name: str = None):
@@ -937,7 +950,7 @@ class GunicornApplication(BaseApplication):
             service = self._create_service(self.service_type, self.service_config)
         logger.info("Service initialized.")
 
-        return FlaskServer(service)
+        return FlaskServer(service, self.options)
 
     @staticmethod
     def _create_service(service_type, service_config):
@@ -1014,6 +1027,16 @@ class RunServiceConfig(BaseModel):
         description="SSL certificate file.",
         default=None
     )
+    access_control_allow_origin: Optional[str] = Field(
+        title="Access control allow origin",
+        description="Access control allow origin.",
+        default="*"
+    )
+    access_control_allow_methods: Optional[str] = Field(
+        title="Access control allow methods",
+        description="Access control allow methods.",
+        default="GET, POST"
+    )
 
 
 def run_service(
@@ -1086,7 +1109,9 @@ def run_service(
         "keyfile": run_config.keyfile,
         "certfile": run_config.certfile,
         "worker_class": run_config.worker_class,
-        "ssl_context": ssl_context
+        "ssl_context": ssl_context,
+        "access_control_allow_origin": run_config.access_control_allow_origin,
+        "access_control_allow_methods": run_config.access_control_allow_methods,
     }
     for name, value in options.items():
         logger.info(f"Option {name}: {value}")
