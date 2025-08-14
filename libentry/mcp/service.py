@@ -1037,6 +1037,11 @@ class RunServiceConfig(BaseModel):
         description="Access control allow methods.",
         default="GET, POST"
     )
+    name: Optional[str] = Field(
+        title="服务实例名称",
+        description="服务实例名称，会在进程命令行中显示。",
+        default=None
+    )
 
 
 def run_service(
@@ -1086,6 +1091,14 @@ def run_service(
         for name, value in kwargs.items():
             setattr(run_config, name, value)
 
+    if run_config.name is None:
+        name = service_type.__name__
+        module = service_type.__module__
+        if module != "builtins":
+            name = f"{module}.{name}"
+        run_config.name = name
+    run_config.name = f"{run_config.name} ({run_config.host}:{run_config.port})"
+
     logger.info("Starting gunicorn server.")
 
     def ssl_context(config, _default_ssl_context_factory):
@@ -1112,6 +1125,7 @@ def run_service(
         "ssl_context": ssl_context,
         "access_control_allow_origin": run_config.access_control_allow_origin,
         "access_control_allow_methods": run_config.access_control_allow_methods,
+        "proc_name": run_config.name,
     }
     for name, value in options.items():
         logger.info(f"Option {name}: {value}")
