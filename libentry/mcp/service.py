@@ -20,7 +20,7 @@ from libentry.mcp.api import APIInfo, list_api_info
 from libentry.mcp.types import BlobResourceContents, CallToolRequestParams, CallToolResult, Implementation, \
     InitializeRequestParams, InitializeResult, JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, \
     ListResourcesResult, ListToolsResult, MIME, ReadResourceRequestParams, ReadResourceResult, Resource, SSE, \
-    ServerCapabilities, SubroutineError, SubroutineResponse, TextContent, TextResourceContents, Tool, ToolSchema, \
+    ServerCapabilities, SubroutineError, SubroutineResponse, TextResourceContents, Tool, ToolSchema, \
     ToolsCapability
 from libentry.schema import APISignature, get_api_signature, query_api
 
@@ -643,26 +643,10 @@ class ToolsService:
         try:
             response = route.handler.subroutine_adapter(params.arguments)
         except Exception as e:
-            error = json.dumps(SubroutineError.from_exception(e))
-            return CallToolResult(
-                content=[TextContent(text=error)],
-                isError=True
-            )
+            return CallToolResult.from_exception(e)
 
         if not isinstance(response, GeneratorType):
-            if response.error is not None:
-                text = json.dumps(response.error)
-                return CallToolResult(
-                    content=[TextContent(text=text)],
-                    isError=True
-                )
-            else:
-                result = response.result
-                text = json.dumps(result) if isinstance(result, (Dict, BaseModel)) else str(result)
-                return CallToolResult(
-                    content=[TextContent(text=text)],
-                    isError=False
-                )
+            return CallToolResult.from_subroutine_response(response)
         else:
             return self._iter_tool_results(response)
 
@@ -674,43 +658,17 @@ class ToolsService:
             it = iter(responses)
             while True:
                 response = next(it)
+                assert isinstance(response, SubroutineResponse)
+                yield CallToolResult.from_subroutine_response(response)
                 if response.error is not None:
-                    text = json.dumps(response.error)
-                    yield CallToolResult(
-                        content=[TextContent(text=text)],
-                        isError=True
-                    )
                     break
-                else:
-                    result = response.result
-                    text = json.dumps(result) if isinstance(result, (Dict, BaseModel)) else str(result)
-                    yield CallToolResult(
-                        content=[TextContent(text=text)],
-                        isError=False
-                    )
         except StopIteration as e:
             response = e.value
             if response is not None:
-                if response.error is not None:
-                    text = json.dumps(response.error)
-                    return CallToolResult(
-                        content=[TextContent(text=text)],
-                        isError=True
-                    )
-                else:
-                    result = response.result
-                    text = json.dumps(result) if isinstance(result, (Dict, BaseModel)) else str(result)
-                    return CallToolResult(
-                        content=[TextContent(text=text)],
-                        isError=False
-                    )
+                assert isinstance(response, SubroutineResponse)
+                return CallToolResult.from_subroutine_response(response)
         except Exception as e:
-            text = json.dumps(SubroutineError.from_exception(e))
-            error = CallToolResult(
-                content=[TextContent(text=text)],
-                isError=True
-            )
-            yield error
+            yield CallToolResult.from_exception(e)
         return None
 
 

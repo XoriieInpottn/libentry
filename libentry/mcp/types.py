@@ -354,6 +354,36 @@ class TextContent(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class ImageContent(BaseModel):
+    """Image content for a message."""
+
+    type: Literal["image"] = "image"
+    data: str
+    """The base64-encoded image data."""
+    mimeType: str
+    """
+    The MIME type of the image. Different providers may support different
+    image types.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
+class AudioContent(BaseModel):
+    """Audio content for a message."""
+
+    type: Literal["audio"]
+    data: str
+    """The base64-encoded audio data."""
+    mimeType: str
+    """
+    The MIME type of the audio. Different providers may support different
+    audio types.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
 class CallToolRequestParams(BaseModel):
     """Parameters for calling a tool."""
 
@@ -366,8 +396,66 @@ class CallToolRequestParams(BaseModel):
 class CallToolResult(BaseModel):
     """The server's response to a tool call."""
 
-    content: List[TextContent]
+    content: List[Union[TextContent, ImageContent, AudioContent]] = []
+    structuredContent: Optional[Dict[str, Any]] = None
     isError: bool = False
+
+    @classmethod
+    def from_exception(cls, e: Exception):
+        error = SubroutineError.from_exception(e)
+        return cls(
+            content=[TextContent(text=error.message)],
+            structuredContent=error.model_dump(exclude_none=True),
+            isError=True
+        )
+
+    @classmethod
+    def from_subroutine_response(cls, response: SubroutineResponse):
+        if response.error is not None:
+            error = response.error
+            return cls(
+                content=[TextContent(text=error.message)],
+                structuredContent=error.model_dump(exclude_none=True),
+                isError=True
+            )
+        else:
+            result = response.result
+            if isinstance(result, Dict):
+                return cls(
+                    content=[],
+                    structuredContent=result,
+                    isError=False
+                )
+            elif isinstance(result, BaseModel):
+                return cls(
+                    content=[],
+                    structuredContent=result.model_dump(exclude_none=False),
+                    isError=False
+                )
+            elif isinstance(result, List):
+                return cls(
+                    content=result,
+                    structuredContent=None,
+                    isError=False
+                )
+            elif isinstance(result, (TextContent, ImageContent, AudioContent)):
+                return cls(
+                    content=[result],
+                    structuredContent=None,
+                    isError=False
+                )
+            elif isinstance(result, str):
+                return cls(
+                    content=[TextContent(text=result)],
+                    structuredContent=None,
+                    isError=False
+                )
+            else:
+                return cls(
+                    content=[TextContent(text=str(result))],
+                    structuredContent=None,
+                    isError=False
+                )
 
 
 class Resource(BaseModel):
