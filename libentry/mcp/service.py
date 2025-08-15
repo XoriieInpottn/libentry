@@ -1092,12 +1092,16 @@ def run_service(
             setattr(run_config, name, value)
 
     if run_config.name is None:
-        name = service_type.__name__
-        module = service_type.__module__
-        if module != "builtins":
-            name = f"{module}.{name}"
-        run_config.name = name
-    run_config.name = f"{run_config.name} ({run_config.host}:{run_config.port})"
+        if hasattr(service_type, "__name__"):
+            name = service_type.__name__
+            if hasattr(service_type, "__module__"):
+                module = service_type.__module__
+                if module != "builtins":
+                    name = f"{module}.{name}"
+            run_config.name = name
+        else:
+            run_config.name = ""
+    run_config.name = f"{run_config.name}({run_config.host}:{run_config.port})"
 
     logger.info("Starting gunicorn server.")
 
