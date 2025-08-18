@@ -4,5 +4,6 @@ numpy
 urllib3
 httpx
 Flask
+flask-cors
 gunicorn
 psutil

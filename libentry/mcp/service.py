@@ -12,6 +12,7 @@ from types import GeneratorType
 from typing import Any, Callable, Dict, Generator, Iterable, List, Literal, Optional, Tuple, Union
 
 from flask import Flask, request as flask_request
+from flask_cors import CORS
 from pydantic import BaseModel, Field, TypeAdapter
 
 from libentry import json, logger
@@ -773,8 +774,6 @@ class FlaskServer(Flask):
     def __init__(self, service, options: Dict[str, Any]):
         super().__init__(__name__)
         self.options = options
-        self.access_control_allow_origin = self.options.get("access_control_allow_origin")
-        self.access_control_allow_methods = self.options.get("access_control_allow_methods")
 
         self.service_routes = {}
         self.builtin_routes = {}
@@ -837,20 +836,10 @@ class FlaskServer(Flask):
         return routes
 
     def ok(self, body: Union[str, Iterable[str], None], mimetype: str):
-        response = self.response_class(body, status=200, mimetype=mimetype)
-        if self.access_control_allow_origin:
-            response.headers["Access-Control-Allow-Origin"] = "*"
-        if self.access_control_allow_methods:
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST"
-        return response
+        return self.response_class(body, status=200, mimetype=mimetype)
 
     def error(self, body: str, mimetype=MIME.plain.value):
-        response = self.response_class(body, status=500, mimetype=mimetype)
-        if self.access_control_allow_origin:
-            response.headers["Access-Control-Allow-Origin"] = "*"
-        if self.access_control_allow_methods:
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST"
-        return response
+        return self.response_class(body, status=500, mimetype=mimetype)
 
     @api.get("/")
     def index(self, name: str = None):
@@ -908,7 +897,25 @@ class GunicornApplication(BaseApplication):
             service = self._create_service(self.service_type, self.service_config)
         logger.info("Service initialized.")
 
-        return FlaskServer(service, self.options)
+        app = FlaskServer(service, self.options)
+
+        cors_kwargs = {}
+        origins = self.options.get("access_control_allow_origin")
+        if origins:
+            cors_kwargs["origins"] = [m.strip() for m in origins.split(",")]
+
+        methods = self.options.get("access_control_allow_methods")
+        if methods:
+            cors_kwargs["methods"] = [m.strip() for m in methods.split(",")]
+
+        allow_headers = self.options.get("access_control_allow_headers")
+        if allow_headers:
+            cors_kwargs["allow_headers"] = [m.strip() for m in allow_headers.split(",")]
+
+        if cors_kwargs:
+            logger.info(f"CORS arguments: {cors_kwargs}")
+            CORS(app, **cors_kwargs)
+        return app
 
     @staticmethod
     def _create_service(service_type, service_config):
@@ -994,6 +1001,11 @@ class RunServiceConfig(BaseModel):
         title="Access control allow methods",
         description="Access control allow methods.",
         default="GET, POST"
+    )
+    access_control_allow_headers: Optional[str] = Field(
+        title="Access control allow headers",
+        description="Access control allow headers.",
+        default="*"
     )
     name: Optional[str] = Field(
         title="服务实例名称",
@@ -1087,6 +1099,7 @@ def run_service(
         "ssl_context": ssl_context,
         "access_control_allow_origin": run_config.access_control_allow_origin,
         "access_control_allow_methods": run_config.access_control_allow_methods,
+        "access_control_allow_headers": run_config.access_control_allow_headers,
         "proc_name": run_config.name,
     }
     for name, value in options.items():
