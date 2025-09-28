@@ -4,6 +4,7 @@ __author__ = "xi"
 
 import asyncio
 import base64
+import copy
 import uuid
 from dataclasses import dataclass
 from queue import Empty, Queue
@@ -592,6 +593,59 @@ class NotificationsService:
         pass
 
 
+def resolve_ref(schema, root=None, seen=None):
+    if root is None:
+        root = schema
+    if seen is None:
+        seen = set()
+
+    if isinstance(schema, dict):
+        if "$ref" in schema:
+            ref_path = schema["$ref"]
+            if not ref_path.startswith("#/"):
+                raise ValueError(f"只支持本地引用: {ref_path}")
+
+            if ref_path in seen:
+                # 循环引用，返回原样
+                return {"$ref": ref_path}
+
+            seen.add(ref_path)
+
+            # 路径解析
+            parts = ref_path[2:].split("/")
+            target = root
+            for part in parts:
+                target = target[part]
+
+            resolved = copy.deepcopy(target)
+            resolved = resolve_ref(resolved, root, seen)
+
+            seen.remove(ref_path)
+
+            # 合并额外字段（除 $ref 之外的部分）
+            extras = {k: v for k, v in schema.items() if k != "$ref"}
+            if extras:
+                if isinstance(resolved, dict):
+                    merged = copy.deepcopy(resolved)
+                    for k, v in extras.items():
+                        merged[k] = resolve_ref(v, root, seen)
+                    return merged
+                else:
+                    # 被引用的不是 dict，无法合并，直接返回展开的结果
+                    return resolved
+
+            return resolved
+
+        else:
+            return {k: resolve_ref(v, root, seen) for k, v in schema.items()}
+
+    elif isinstance(schema, list):
+        return [resolve_ref(v, root, seen) for v in schema]
+
+    else:
+        return schema
+
+
 class ToolsService:
 
     def __init__(self, service_routes: Dict[str, "Route"]):
@@ -615,10 +669,12 @@ class ToolsService:
             api_info = route.api_info
             api_models = route.fn if isinstance(route.fn, APISignature) else get_api_signature(route.fn)
             args_model = api_models.input_model or api_models.bundled_model
+            json_schema = args_model.model_json_schema()
+            resolved_schema = resolve_ref(json_schema)
             tool = Tool(
                 name=api_info.name,
                 description=api_info.description,
-                inputSchema=ToolSchema.model_validate(args_model.model_json_schema())
+                inputSchema=ToolSchema.model_validate(resolved_schema)
             )
             tools.append(tool)
             # schema = query_api(route.fn)

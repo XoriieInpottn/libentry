@@ -314,14 +314,19 @@ class ToolProperty(BaseModel):
     type: Optional[str] = None
     anyOf: Optional[List["ToolProperty"]] = None
     items: Optional["ToolProperty"] = None
-    additionalProperties: Optional["ToolProperty"] = None
+    properties: Optional[Dict[str, "ToolProperty"]] = None
+    additionalProperties: Optional[Union[bool, "ToolProperty"]] = None
+    # title: Optional[str] = None
     description: Optional[str] = None
+    required: Optional[List[str]] = None
 
 
 class ToolSchema(BaseModel):
     type: str = "object"
-    properties: Dict[str, ToolProperty] = {}
-    required: List[str] = []
+    properties: Optional[Dict[str, "ToolProperty"]] = None
+    # title: Optional[str] = None
+    description: Optional[str] = None
+    required: Optional[List[str]] = None
 
 
 class Tool(BaseModel):
