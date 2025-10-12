@@ -953,7 +953,7 @@ class GunicornApplication(BaseApplication):
             service = self._create_service(self.service_type, self.service_config)
         logger.info("Service initialized.")
 
-        app = FlaskServer(service, self.options)
+        app = service if isinstance(service, Flask) else FlaskServer(service, self.options)
 
         cors_kwargs = {}
         origins = self.options.get("access_control_allow_origin")
