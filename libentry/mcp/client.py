@@ -124,7 +124,7 @@ class SubroutineMixIn(abc.ABC):
             path: Union[str, Type[HasRequestPath], HasRequestPath, Any],
             params: Optional[Union[JSONObject, BaseModel]] = None,
             options: Optional[HTTPOptions] = None
-    ) -> Union[SubroutineResponse, Iterable[SubroutineResponse]]:
+    ) -> Union[SubroutineResponse, Generator[SubroutineResponse, None, None]]:
         raise NotImplementedError()
 
     def request(
@@ -132,7 +132,7 @@ class SubroutineMixIn(abc.ABC):
             path: Union[str, Type[HasRequestPath], HasRequestPath, Any],
             params: Optional[Union[JSONObject, BaseModel]] = None,
             options: Optional[HTTPOptions] = None
-    ) -> Union[JSONType, Iterable[JSONType]]:
+    ) -> Union[JSONType, Generator[JSONType, None, None]]:
         response = self.subroutine_request(path, params, options)
         if not isinstance(response, GeneratorType):
             if response.error is None:
@@ -143,7 +143,7 @@ class SubroutineMixIn(abc.ABC):
             return self._iter_results_from_subroutine(response)
 
     @staticmethod
-    def _iter_results_from_subroutine(response: Iterable[SubroutineResponse]) -> Iterable[JSONType]:
+    def _iter_results_from_subroutine(response: Iterable[SubroutineResponse]) -> Generator[JSONType, None, None]:
         it = iter(response)
         try:
             while True:
@@ -165,7 +165,7 @@ class SubroutineMixIn(abc.ABC):
             self,
             path: Union[str, Type[HasRequestPath], HasRequestPath, Any],
             options: Optional[HTTPOptions] = None
-    ) -> Union[JSONType, Iterable[JSONType]]:
+    ) -> Union[JSONType, Generator[JSONType, None, None]]:
         if options is None:
             options = HTTPOptions(method="GET")
         if options.method != "GET":
@@ -177,7 +177,7 @@ class SubroutineMixIn(abc.ABC):
             path: Union[str, Type[HasRequestPath], HasRequestPath, Any],
             params: Optional[Union[JSONObject, BaseModel]] = None,
             options: Optional[HTTPOptions] = None
-    ) -> Union[JSONType, Iterable[JSONType]]:
+    ) -> Union[JSONType, Generator[JSONType, None, None]]:
         if options is None:
             options = HTTPOptions(method="POST")
         if options.method != "POST":
@@ -193,7 +193,7 @@ class JSONRPCMixIn(abc.ABC):
             request: JSONRPCRequest,
             path: Optional[str] = None,
             options: Optional[HTTPOptions] = None
-    ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse]]:
+    ) -> Union[JSONRPCResponse, Generator[JSONRPCResponse, None, None]]:
         raise NotImplementedError()
 
     @abc.abstractmethod
@@ -210,7 +210,7 @@ class JSONRPCMixIn(abc.ABC):
             method: str,
             params: Optional[JSONObject] = None,
             options: Optional[HTTPOptions] = None
-    ) -> Union[JSONType, Iterable[JSONType]]:
+    ) -> Union[JSONType, Generator[JSONType, None, None]]:
         request = JSONRPCRequest(
             jsonrpc="2.0",
             id=str(uuid.uuid4()),
@@ -229,7 +229,7 @@ class JSONRPCMixIn(abc.ABC):
             return self._iter_results_from_jsonrpc(response)
 
     @staticmethod
-    def _iter_results_from_jsonrpc(response: Iterable[JSONRPCResponse]) -> Iterable[JSONType]:
+    def _iter_results_from_jsonrpc(response: Iterable[JSONRPCResponse]) -> Generator[JSONType, None, None]:
         it = iter(response)
         try:
             while True:
@@ -272,7 +272,11 @@ class MCPMixIn(JSONRPCMixIn, abc.ABC):
         result = self.call("tools/list")
         return ListToolsResult.model_validate(result)
 
-    def call_tool(self, name: str, arguments: Dict[str, Any]) -> Union[CallToolResult, Iterable[CallToolResult]]:
+    def call_tool(
+            self,
+            name: str,
+            arguments: Dict[str, Any]
+    ) -> Union[CallToolResult, Generator[CallToolResult, None, Optional[CallToolResult]]]:
         params = CallToolRequestParams(
             name=name,
             arguments=arguments
@@ -298,7 +302,10 @@ class MCPMixIn(JSONRPCMixIn, abc.ABC):
         result = self.call("resources/list")
         return ListResourcesResult.model_validate(result)
 
-    def read_resource(self, uri: str) -> Union[ReadResourceResult, Iterable[ReadResourceResult]]:
+    def read_resource(
+            self,
+            uri: str
+    ) -> Union[ReadResourceResult, Generator[ReadResourceResult, None, Optional[ReadResourceResult]]]:
         params = ReadResourceRequestParams(uri=uri).model_dump()
         result = self.call("resources/read", params)
         if not isinstance(result, GeneratorType):
@@ -359,7 +366,7 @@ class APIClient(SubroutineMixIn, MCPMixIn):
         for k, v in json_data.items():
             if v is not None:
                 result.append((
-                    k.encode("utf-8") if isinstance(k, str) else k,
+                    k.encode("utf-8"),
                     v.encode("utf-8") if isinstance(v, str) else v,
                 ))
         return urlencode(result, doseq=True)
@@ -473,7 +480,7 @@ class APIClient(SubroutineMixIn, MCPMixIn):
             response.close()
 
     @staticmethod
-    def _iter_lines(response: httpx.Response) -> Iterable[str]:
+    def _iter_lines(response: httpx.Response) -> Generator[str, None, None]:
         try:
             for line in response.iter_lines():
                 yield line
@@ -481,7 +488,7 @@ class APIClient(SubroutineMixIn, MCPMixIn):
             response.close()
 
     @staticmethod
-    def _iter_events(lines: Iterable[str]) -> Iterable[SSE]:
+    def _iter_events(lines: Iterable[str]) -> Generator[SSE, None, None]:
         decoder = SSEDecoder()
         for line in lines:
             line = line.rstrip()
@@ -490,7 +497,7 @@ class APIClient(SubroutineMixIn, MCPMixIn):
                 yield sse
 
     @staticmethod
-    def _iter_objs(lines: Iterable[str]) -> Iterable[Dict]:
+    def _iter_objs(lines: Iterable[str]) -> Generator[Dict, None, None]:
         for line in lines:
             line = line.strip()
             if not line:
@@ -502,7 +509,7 @@ class APIClient(SubroutineMixIn, MCPMixIn):
             path: Union[str, Type[HasRequestPath], HasRequestPath, Any],
             params: Optional[Union[JSONObject, BaseModel]] = None,
             options: Optional[HTTPOptions] = None
-    ) -> Union[SubroutineResponse, Iterable[SubroutineResponse]]:
+    ) -> Union[SubroutineResponse, Generator[SubroutineResponse, None, None]]:
         if isinstance(path, BaseModel):
             if params is None:
                 params = path
@@ -524,7 +531,7 @@ class APIClient(SubroutineMixIn, MCPMixIn):
             return self._iter_subroutine_responses(json_response)
 
     @staticmethod
-    def _iter_subroutine_responses(response: HTTPResponse) -> Iterable[SubroutineResponse]:
+    def _iter_subroutine_responses(response: HTTPResponse) -> Generator[SubroutineResponse, None, None]:
         return_response = None
         for sse in response.content:
             assert isinstance(sse, SSE)
@@ -541,7 +548,7 @@ class APIClient(SubroutineMixIn, MCPMixIn):
             request: JSONRPCRequest,
             path: Optional[str] = None,
             options: Optional[HTTPOptions] = None
-    ) -> Union[JSONRPCResponse, Iterable[JSONRPCResponse]]:
+    ) -> Union[JSONRPCResponse, Generator[JSONRPCResponse, None, None]]:
         json_request = HTTPRequest(
             path=path or self.jsonrpc_endpoint,
             json_obj=request.model_dump(),
@@ -554,7 +561,7 @@ class APIClient(SubroutineMixIn, MCPMixIn):
             return self._iter_jsonrpc_responses(json_response)
 
     @staticmethod
-    def _iter_jsonrpc_responses(response: HTTPResponse) -> Iterable[JSONRPCResponse]:
+    def _iter_jsonrpc_responses(response: HTTPResponse) -> Generator[JSONRPCResponse, None, None]:
         return_response = None
         for sse in response.content:
             assert isinstance(sse, SSE)
