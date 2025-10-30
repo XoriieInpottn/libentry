@@ -20,6 +20,9 @@ class ExampleServiceConfig(BaseModel):
 
 class ExampleRequest(Request):
     __request_name__ = "give_example"
+    __description__ = """
+    This is an example request.
+    """
 
     path: str = Field(default=os.path.abspath(__file__))
     stream: bool = Field(True)

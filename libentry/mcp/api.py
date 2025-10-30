@@ -13,9 +13,10 @@ __all__ = [
     "list_api_info",
 ]
 
+import inspect
 import re
 from functools import partial
-from typing import Any, Callable, List, Literal, Optional, Tuple, Type, Union
+from typing import Any, Callable, List, Literal, Optional, Tuple, Type, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict
 
@@ -78,7 +79,6 @@ def api(
         if not hasattr(fn, "__name__"):
             raise RuntimeError("At least one of \"path\" or \"fn.__name__\" should be given.")
         fn_name = getattr(fn, "__name__")
-        fn_doc = getattr(fn, "__doc__")
 
         if path:
             if hasattr(path, "get_request_path"):
@@ -95,7 +95,7 @@ def api(
             path=_path,
             methods=methods,
             name=name or _path.lstrip("/"),
-            description=description or fn_doc,
+            description=description or get_function_description(fn),
             tag=tag
         )
         api_info.model_extra.update(kwargs)
@@ -103,6 +103,36 @@ def api(
         return fn
 
     return decorator
+
+
+def get_function_description(func):
+    sig = inspect.signature(func)
+    params = [p for p in sig.parameters.values() if p.name != "self"]
+
+    if len(params) != 1:
+        return inspect.getdoc(func)
+
+    param = params[0]
+    ann = param.annotation
+    if ann is inspect._empty:
+        return inspect.getdoc(func)
+
+    origin = get_origin(ann)
+    if origin is Union:
+        args = [a for a in get_args(ann) if a is not type(None)]
+        if len(args) == 1:
+            ann = args[0]
+    # elif origin is Annotated:
+    #     ann = get_args(ann)[0]
+
+    desc = None
+    if isinstance(ann, type) and issubclass(ann, BaseModel):
+        if isinstance(model_config := ann.model_config, dict) and ("description" in model_config):
+            desc = model_config["description"]
+        elif hasattr(ann, "__description__"):
+            desc = getattr(ann, "__description__")
+
+    return desc or inspect.getdoc(func)
 
 
 route = api
