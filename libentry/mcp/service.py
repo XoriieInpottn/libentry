@@ -1048,6 +1048,11 @@ class RunServiceConfig(BaseModel):
         description="SSL certificate file.",
         default=None
     )
+    accesslog: Optional[str] = Field(
+        title="Access log file.",
+        description="Access log file. `-` means stdout.",
+        default=None
+    )
     access_control_allow_origin: Optional[str] = Field(
         title="Access control allow origin",
         description="Access control allow origin.",
@@ -1158,6 +1163,8 @@ def run_service(
         "access_control_allow_headers": run_config.access_control_allow_headers,
         "proc_name": run_config.name,
     }
+    if run_config.accesslog:
+        options["accesslog"] = run_config.accesslog
     for name, value in options.items():
         logger.info(f"Option {name}: {value}")
     GunicornApplication(service_type, service_config, options).run()
