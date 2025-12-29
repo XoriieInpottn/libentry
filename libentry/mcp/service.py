@@ -5,26 +5,67 @@ __author__ = "xi"
 import asyncio
 import base64
 import copy
+import multiprocessing
+import os
 import uuid
 from dataclasses import dataclass
-from queue import Empty, Queue
+from datetime import datetime
+from queue import Empty
+from queue import Queue
 from threading import Lock
+from threading import Thread
+from time import sleep
 from types import GeneratorType
-from typing import Any, Callable, Dict, Generator, Iterable, List, Literal, Optional, Tuple, Union
+from typing import Any
+from typing import Callable
+from typing import Dict
+from typing import Generator
+from typing import Iterable
+from typing import List
+from typing import Literal
+from typing import Optional
+from typing import Tuple
+from typing import Union
 
-from flask import Flask, request as flask_request
+from flask import Flask
+from flask import request as flask_request
 from flask_cors import CORS
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel
+from pydantic import Field
+from pydantic import TypeAdapter
 
-from libentry import json, logger
+from libentry import json
+from libentry import logger
 from libentry.mcp import api
-from libentry.mcp.api import APIInfo, list_api_info
-from libentry.mcp.types import BlobResourceContents, CallToolRequestParams, CallToolResult, Implementation, \
-    InitializeRequestParams, InitializeResult, JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, \
-    ListResourcesResult, ListToolsResult, MIME, ReadResourceRequestParams, ReadResourceResult, Resource, SSE, \
-    ServerCapabilities, SubroutineError, SubroutineResponse, TextResourceContents, Tool, ToolSchema, \
-    ToolsCapability
-from libentry.schema import APISignature, get_api_signature, query_api
+from libentry.mcp.api import APIInfo
+from libentry.mcp.api import list_api_info
+from libentry.mcp.types import BlobResourceContents
+from libentry.mcp.types import CallToolRequestParams
+from libentry.mcp.types import CallToolResult
+from libentry.mcp.types import Implementation
+from libentry.mcp.types import InitializeRequestParams
+from libentry.mcp.types import InitializeResult
+from libentry.mcp.types import JSONRPCError
+from libentry.mcp.types import JSONRPCNotification
+from libentry.mcp.types import JSONRPCRequest
+from libentry.mcp.types import JSONRPCResponse
+from libentry.mcp.types import ListResourcesResult
+from libentry.mcp.types import ListToolsResult
+from libentry.mcp.types import MIME
+from libentry.mcp.types import ReadResourceRequestParams
+from libentry.mcp.types import ReadResourceResult
+from libentry.mcp.types import Resource
+from libentry.mcp.types import SSE
+from libentry.mcp.types import ServerCapabilities
+from libentry.mcp.types import SubroutineError
+from libentry.mcp.types import SubroutineResponse
+from libentry.mcp.types import TextResourceContents
+from libentry.mcp.types import Tool
+from libentry.mcp.types import ToolSchema
+from libentry.mcp.types import ToolsCapability
+from libentry.schema import APISignature
+from libentry.schema import get_api_signature
+from libentry.schema import query_api
 
 try:
     from gunicorn.app.base import BaseApplication
@@ -827,7 +868,7 @@ class Route:
 
 class FlaskServer(Flask):
 
-    def __init__(self, service, options: Dict[str, Any]):
+    def __init__(self, service, options: Dict[str, Any], lock=None):
         super().__init__(__name__)
         self.options = options
 
@@ -865,6 +906,33 @@ class FlaskServer(Flask):
         for route in (*self.service_routes.values(), *self.builtin_routes.values()):
             self.route(route.api_info.path, methods=route.api_info.methods)(route.handler)
         logger.info("Flask application initialized.")
+
+        if lock is not None and (status_log := options.get("statuslog")):
+            def _status_loop():
+                pid = os.getpid()
+                try:
+                    import psutil
+                except ModuleNotFoundError:
+                    logger.error("Service status monitor not started. Please install `psutil`.")
+                    return
+
+                process = psutil.Process(pid)
+                while True:
+                    mem_info = process.memory_info()
+                    rss = mem_info.rss
+                    cpu_pct = process.cpu_percent()
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    msg = f"pid={pid}, rss={rss / 1024 / 1024:.02f}MB, cpu={cpu_pct:.02f}%"
+                    if status_log == "-":
+                        logger.info(msg)
+                    else:
+                        msg = f"{now} {msg}\n"
+                        with lock:
+                            with open(status_log, "a") as f:
+                                f.write(msg)
+                    sleep(30)
+
+            self.status_thread = Thread(target=_status_loop, daemon=True).start()
 
     def _create_routes(self, service: Any, existing: Optional[Dict[str, Route]] = None) -> Dict[str, Route]:
         routes = {}
@@ -920,6 +988,7 @@ class GunicornApplication(BaseApplication):
         self.service_type = service_type
         self.service_config = service_config
         self.options = options or {}
+        self.lock = multiprocessing.Lock()
         super().__init__()
 
     def load_config(self):
@@ -953,7 +1022,7 @@ class GunicornApplication(BaseApplication):
             service = self._create_service(self.service_type, self.service_config)
         logger.info("Service initialized.")
 
-        app = service if isinstance(service, Flask) else FlaskServer(service, self.options)
+        app = service if isinstance(service, Flask) else FlaskServer(service, self.options, self.lock)
 
         cors_kwargs = {}
         origins = self.options.get("access_control_allow_origin")
@@ -1052,6 +1121,11 @@ class RunServiceConfig(BaseModel):
         title="Access log file.",
         description="Access log file. `-` means stdout.",
         default=None
+    )
+    statuslog: Optional[str] = Field(
+        title="Worker status log file.",
+        description="Worker status log file.",
+        default="-"
     )
     access_control_allow_origin: Optional[str] = Field(
         title="Access control allow origin",
@@ -1165,6 +1239,8 @@ def run_service(
     }
     if run_config.accesslog:
         options["accesslog"] = run_config.accesslog
+    if run_config.statuslog:
+        options["statuslog"] = run_config.statuslog
     for name, value in options.items():
         logger.info(f"Option {name}: {value}")
     GunicornApplication(service_type, service_config, options).run()
