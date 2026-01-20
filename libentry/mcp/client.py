@@ -5,21 +5,51 @@ __author__ = "xi"
 import abc
 import uuid
 from queue import Queue
-from threading import Semaphore, Thread
+from threading import Semaphore
+from threading import Thread
 from time import sleep
 from types import GeneratorType
-from typing import Any, Dict, Generator, Iterable, List, Optional, Tuple, Type, Union
+from typing import Any
+from typing import Dict
+from typing import Generator
+from typing import Iterable
+from typing import List
+from typing import Optional
+from typing import Tuple
+from typing import Type
+from typing import Union
 from urllib.parse import urlencode
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from httpx import Limits
+from pydantic import BaseModel
+from pydantic import TypeAdapter
 
 from libentry import json
 from libentry.mcp.api import HasRequestPath
-from libentry.mcp.types import CallToolRequestParams, CallToolResult, ClientCapabilities, HTTPOptions, HTTPRequest, \
-    HTTPResponse, Implementation, InitializeRequestParams, InitializeResult, JSONObject, JSONRPCError, \
-    JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, JSONType, ListResourcesResult, ListToolsResult, MIME, \
-    ReadResourceRequestParams, ReadResourceResult, SSE, SubroutineError, SubroutineResponse
+from libentry.mcp.types import CallToolRequestParams
+from libentry.mcp.types import CallToolResult
+from libentry.mcp.types import ClientCapabilities
+from libentry.mcp.types import HTTPOptions
+from libentry.mcp.types import HTTPRequest
+from libentry.mcp.types import HTTPResponse
+from libentry.mcp.types import Implementation
+from libentry.mcp.types import InitializeRequestParams
+from libentry.mcp.types import InitializeResult
+from libentry.mcp.types import JSONObject
+from libentry.mcp.types import JSONRPCError
+from libentry.mcp.types import JSONRPCNotification
+from libentry.mcp.types import JSONRPCRequest
+from libentry.mcp.types import JSONRPCResponse
+from libentry.mcp.types import JSONType
+from libentry.mcp.types import ListResourcesResult
+from libentry.mcp.types import ListToolsResult
+from libentry.mcp.types import MIME
+from libentry.mcp.types import ReadResourceRequestParams
+from libentry.mcp.types import ReadResourceResult
+from libentry.mcp.types import SSE
+from libentry.mcp.types import SubroutineError
+from libentry.mcp.types import SubroutineResponse
 
 
 class ServiceError(RuntimeError):
@@ -337,7 +367,10 @@ class APIClient(SubroutineMixIn, MCPMixIn):
             user_agent: str = "python-libentry",
             connection: str = "keep-alive",
             api_key: Optional[str] = None,
-            verify=False,
+            verify: bool = False,
+            max_connections: int = 1000,
+            max_keepalive_connections: int = 20,
+            keepalive_expiry: float = 5.0,
             stream_read_size: int = 512,
             sse_endpoint: str = "/sse",
             jsonrpc_endpoint: str = "/message"
@@ -358,7 +391,14 @@ class APIClient(SubroutineMixIn, MCPMixIn):
         self.sse_endpoint = sse_endpoint
         self.jsonrpc_endpoint = jsonrpc_endpoint
 
-        self.client = httpx.Client(verify=verify)
+        self.client = httpx.Client(
+            verify=verify,
+            limits=Limits(
+                max_connections=max_connections,
+                max_keepalive_connections=max_keepalive_connections,
+                keepalive_expiry=keepalive_expiry
+            )
+        )
 
     @staticmethod
     def x_www_form_urlencoded(json_data: Dict[str, Any]):
