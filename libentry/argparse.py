@@ -16,8 +16,17 @@ import argparse
 import ast
 import json
 import re
-from dataclasses import fields, is_dataclass
-from typing import Dict, List, Optional, Sequence, Type, Union, get_args, get_origin
+from dataclasses import fields
+from dataclasses import is_dataclass
+from types import UnionType
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import Sequence
+from typing import Type
+from typing import Union
+from typing import get_args
+from typing import get_origin
 
 import yaml
 from pydantic import BaseModel
@@ -138,7 +147,8 @@ class ArgumentParser(argparse.ArgumentParser):
             if isinstance(anno, type) and issubclass(anno, BaseModel):
                 nested = True
 
-            if get_origin(anno) is Union:
+            origin = get_origin(anno)
+            if origin == Union or origin == UnionType:
                 # Here we just choose the first BaseModel.
                 # So you should avoid define a Union contains multiple BaseModel types.
                 for sub_anno in get_args(anno):
@@ -153,36 +163,40 @@ class ArgumentParser(argparse.ArgumentParser):
             if isinstance(instance, schema):
                 default_value = getattr(instance, name, None)
 
+            desc = info.description + " " if info.description else ""
+            if info.is_required():
+                desc += "(required)"
+            else:
+                if default_value is None:
+                    desc += "(default=None)"
+                elif isinstance(default_value, (str, int, float, bool)):
+                    desc += f"(default={default_value})"
+                elif isinstance(default_value, (Dict, List)):
+                    try:
+                        desc += f"(default={json.dumps(default_value)})"
+                    except TypeError:
+                        default_type = type(default_value).__name__
+                        desc += f"(default={default_type} object)"
+                else:
+                    default_type = type(default_value).__name__
+                    desc += f"(default={default_type} object)"
+
+            self.add_argument(
+                f"--{prefix}.{name}",
+                type=literal_eval,
+                default=DefaultValue(
+                    default_value
+                    if not isinstance(default_value, BaseModel) else
+                    default_value.model_dump()
+                ),
+                help=desc
+            )
+
             if nested:
                 self._add_schema(
                     f"{prefix}.{name}",
                     schema=anno,
                     instance=default_value
-                )
-            else:
-                desc = info.description + " " if info.description else ""
-                if info.is_required():
-                    desc += "(required)"
-                else:
-                    if default_value is None:
-                        desc += "(default=None)"
-                    elif isinstance(default_value, (str, int, float, bool)):
-                        desc += f"(default={default_value})"
-                    elif isinstance(default_value, (Dict, List)):
-                        try:
-                            desc += f"(default={json.dumps(default_value)})"
-                        except TypeError:
-                            default_type = type(default_value).__name__
-                            desc += f"(default={default_type} object)"
-                    else:
-                        default_type = type(default_value).__name__
-                        desc += f"(default={default_type} object)"
-
-                self.add_argument(
-                    f"--{prefix}.{name}",
-                    type=literal_eval,
-                    default=DefaultValue(default_value),
-                    help=desc
                 )
 
     def parse_args(self, args=None, namespace=None):
