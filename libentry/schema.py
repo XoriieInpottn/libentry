@@ -14,6 +14,7 @@ __all__ = [
 import enum
 from dataclasses import asdict, dataclass, is_dataclass
 from inspect import signature
+from types import UnionType
 from typing import Any, Dict, Iterable, List, Literal, Mapping, MutableMapping, NoReturn, Optional, Sequence, Type, \
     Union, get_args, get_origin
 
@@ -271,7 +272,7 @@ def _parse_any(context: ParseContext) -> Optional[str]:
 
 @generic_parser
 def _parse_union(context: ParseContext) -> Optional[List[str]]:
-    if context.origin is Union or str(context.origin) == str(Union):
+    if (context.origin == Union) or (context.origin == UnionType) or str(context.origin) == str(Union):
         return [
             parse_type(arg, context.schemas)
             for arg in get_args(context.annotation)
