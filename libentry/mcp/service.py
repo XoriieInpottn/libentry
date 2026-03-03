@@ -1102,6 +1102,11 @@ class RunServiceConfig(BaseModel):
         description="Workers silent for more than this many seconds are killed and restarted.",
         default=60
     )
+    keep_alive: int = Field(
+        title="Keep-alive timeout",
+        description="The number of seconds to wait for requests on a Keep-Alive connection.",
+        default=2
+    )
     keyfile: Optional[str] = Field(
         title="SSL key file",
         description="SSL key file.",
@@ -1162,6 +1167,7 @@ def run_service(
         backlog: Optional[int] = None,
         worker_class: Optional[str] = None,
         timeout: Optional[int] = None,
+        keep_alive: Optional[int] = None,
         keyfile: Optional[str] = None,
         keyfile_password: Optional[str] = None,
         certfile: Optional[str] = None
@@ -1183,6 +1189,8 @@ def run_service(
         kwargs["worker_class"] = worker_class
     if timeout is not None:
         kwargs["timeout"] = timeout
+    if keep_alive is not None:
+        kwargs["keep_alive"] = keep_alive
     if keyfile is not None:
         kwargs["keyfile"] = keyfile
     if keyfile_password is not None:
@@ -1226,6 +1234,7 @@ def run_service(
         "workers": run_config.num_workers,
         "threads": run_config.num_threads,
         "timeout": run_config.timeout,
+        "keepalive": run_config.keep_alive,
         "worker_connections": run_config.num_connections,
         "backlog": run_config.backlog,
         "keyfile": run_config.keyfile,
