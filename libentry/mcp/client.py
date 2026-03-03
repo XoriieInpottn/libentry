@@ -400,6 +400,26 @@ class APIClient(SubroutineMixIn, MCPMixIn):
             )
         )
 
+    def close(self) -> None:
+        """
+        Close the underlying HTTP client.
+
+        Note:
+            For流式响应（例如 SSE 或 JSON 流），每个 `httpx.Response` 会在迭代完成后自动关闭，
+            因此通常应在所有流式迭代结束后再调用本方法，或使用上下文管理器形式：
+
+                with APIClient(...) as client:
+                    for chunk in client.get(...):
+                        ...
+        """
+        self.client.close()
+
+    def __enter__(self) -> "APIClient":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
     @staticmethod
     def x_www_form_urlencoded(json_data: Dict[str, Any]):
         result = []
