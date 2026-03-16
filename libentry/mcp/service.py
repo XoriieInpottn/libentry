@@ -130,7 +130,7 @@ class SubroutineAdapter:
                 kwargs = bundled_model.model_validate(request or {}).model_dump()
                 response = self.fn(**kwargs)
         except Exception as e:
-            return SubroutineResponse(error=SubroutineError.from_exception(e))
+            return SubroutineResponse(code=500, error=SubroutineError.from_exception(e))
 
         if not isinstance(response, GeneratorType):
             return SubroutineResponse(result=response)
@@ -154,7 +154,7 @@ class SubroutineAdapter:
                 result = SubroutineResponse(result=result)
             return result
         except Exception as e:
-            yield SubroutineResponse(error=SubroutineError.from_exception(e))
+            yield SubroutineResponse(code=500, error=SubroutineError.from_exception(e))
         return None
 
 

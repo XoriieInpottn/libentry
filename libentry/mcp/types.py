@@ -46,6 +46,7 @@ class SubroutineError(BaseModel):
 
 
 class SubroutineResponse(BaseModel):
+    code: int = 0
     result: Optional[Any] = None
     error: Optional[SubroutineError] = None
 
